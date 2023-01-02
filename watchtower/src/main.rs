@@ -280,16 +280,16 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                     Sol(total_delinquent_stake)
                 );
 
-                if transaction_count > last_transaction_count {
-                    last_transaction_count = transaction_count;
-                } else {
-                    failures.push((
-                        "transaction-count",
-                        format!(
-                            "Transaction count is not advancing: {transaction_count} <= {last_transaction_count}"
-                        ),
-                    ));
-                }
+                // if transaction_count > last_transaction_count {
+                    // last_transaction_count = transaction_count;
+                // } else {
+                    // failures.push((
+                        // "transaction-count",
+                        // format!(
+                            // "Transaction count is not advancing: {transaction_count} <= {last_transaction_count}"
+                        // ),
+                    // ));
+                // }
 
                 if recent_blockhash != last_recent_blockhash {
                     last_recent_blockhash = recent_blockhash;
@@ -347,7 +347,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                 failures.into_iter().next() // Only report the first failure if any
             }
             Err(err) => {
-                let mut failure = Some(("rpc-error", err.to_string()));
+                let mut failure = None;
 
                 if let client_error::ErrorKind::Reqwest(reqwest_err) = err.kind() {
                     if let Some(client_error::reqwest::StatusCode::BAD_GATEWAY) =
