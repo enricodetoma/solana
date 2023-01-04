@@ -291,14 +291,14 @@ fn main() -> Result<(), Box<dyn error::Error>> {
                     // ));
                 // }
 
-                if recent_blockhash != last_recent_blockhash {
-                    last_recent_blockhash = recent_blockhash;
-                } else {
-                    failures.push((
-                        "recent-blockhash",
-                        format!("Unable to get new blockhash: {recent_blockhash}"),
-                    ));
-                }
+                // if recent_blockhash != last_recent_blockhash {
+                    // last_recent_blockhash = recent_blockhash;
+                // } else {
+                    // failures.push((
+                        // "recent-blockhash",
+                        // format!("Unable to get new blockhash: {recent_blockhash}"),
+                    // ));
+                // }
 
                 if config.monitor_active_stake && current_stake_percent < 80. {
                     failures.push((
