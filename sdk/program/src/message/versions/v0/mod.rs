@@ -7,7 +7,7 @@
 //!
 //! [`legacy`]: crate::message::legacy
 //! [`v0`]: crate::message::v0
-//! [future message format]: https://docs.solana.com/proposals/versioned-transactions
+//! [future message format]: https://docs.solanalabs.com/proposals/versioned-transactions
 
 use crate::{
     address_lookup_table_account::AddressLookupTableAccount,
@@ -15,8 +15,9 @@ use crate::{
     hash::Hash,
     instruction::{CompiledInstruction, Instruction},
     message::{
-        compiled_keys::CompileError, legacy::is_builtin_key_or_sysvar, AccountKeys, CompiledKeys,
-        MessageHeader, MESSAGE_VERSION_PREFIX,
+        compiled_keys::{CompileError, CompiledKeys},
+        legacy::is_builtin_key_or_sysvar,
+        AccountKeys, MessageHeader, MESSAGE_VERSION_PREFIX,
     },
     pubkey::Pubkey,
     sanitize::SanitizeError,
@@ -88,7 +89,7 @@ pub struct Message {
 
 impl Message {
     /// Sanitize message fields and compiled instruction indexes
-    pub fn sanitize(&self, reject_dynamic_program_ids: bool) -> Result<(), SanitizeError> {
+    pub fn sanitize(&self) -> Result<(), SanitizeError> {
         let num_static_account_keys = self.account_keys.len();
         if usize::from(self.header.num_required_signatures)
             .saturating_add(usize::from(self.header.num_readonly_unsigned_accounts))
@@ -129,6 +130,8 @@ impl Message {
 
         // the combined number of static and dynamic account keys must be <= 256
         // since account indices are encoded as `u8`
+        // Note that this is different from the per-transaction account load cap
+        // as defined in `Bank::get_transaction_account_lock_limit`
         let total_account_keys = num_static_account_keys.saturating_add(num_dynamic_account_keys);
         if total_account_keys > 256 {
             return Err(SanitizeError::IndexOutOfBounds);
@@ -140,18 +143,15 @@ impl Message {
             .checked_sub(1)
             .expect("message doesn't contain any account keys");
 
-        // switch to rejecting program ids loaded from lookup tables so that
-        // static analysis on program instructions can be performed without
-        // loading on-chain data from a bank
-        let max_program_id_ix = if reject_dynamic_program_ids {
+        // reject program ids loaded from lookup tables so that
+        // static analysis on program instructions can be performed
+        // without loading on-chain data from a bank
+        let max_program_id_ix =
             // `expect` is safe because of earlier check that
             // `num_static_account_keys` is non-zero
             num_static_account_keys
                 .checked_sub(1)
-                .expect("message doesn't contain any static account keys")
-        } else {
-            max_account_ix
-        };
+                .expect("message doesn't contain any static account keys");
 
         for ci in &self.instructions {
             if usize::from(ci.program_id_index) > max_program_id_ix {
@@ -179,24 +179,22 @@ impl Message {
     ///
     /// # Examples
     ///
-    /// This example uses the [`solana_address_lookup_table_program`], [`solana_rpc_client`], [`solana_sdk`], and [`anyhow`] crates.
+    /// This example uses the [`solana_rpc_client`], [`solana_sdk`], and [`anyhow`] crates.
     ///
-    /// [`solana_address_lookup_table_program`]: https://docs.rs/solana-address-lookup-table-program
     /// [`solana_rpc_client`]: https://docs.rs/solana-rpc-client
     /// [`solana_sdk`]: https://docs.rs/solana-sdk
     /// [`anyhow`]: https://docs.rs/anyhow
     ///
     /// ```
     /// # use solana_program::example_mocks::{
-    /// #     solana_address_lookup_table_program,
     /// #     solana_rpc_client,
     /// #     solana_sdk,
     /// # };
     /// # use std::borrow::Cow;
     /// # use solana_sdk::account::Account;
     /// use anyhow::Result;
-    /// use solana_address_lookup_table_program::state::AddressLookupTable;
     /// use solana_rpc_client::rpc_client::RpcClient;
+    /// use solana_program::address_lookup_table::{self, state::{AddressLookupTable, LookupTableMeta}};
     /// use solana_sdk::{
     ///      address_lookup_table_account::AddressLookupTableAccount,
     ///      instruction::{AccountMeta, Instruction},
@@ -215,9 +213,10 @@ impl Message {
     ///     # client.set_get_account_response(address_lookup_table_key, Account {
     ///     #   lamports: 1,
     ///     #   data: AddressLookupTable {
+    ///     #     meta: LookupTableMeta::default(),
     ///     #     addresses: Cow::Owned(instruction.accounts.iter().map(|meta| meta.pubkey).collect()),
     ///     #   }.serialize_for_tests().unwrap(),
-    ///     #   owner: solana_address_lookup_table_program::ID,
+    ///     #   owner: address_lookup_table::program::id(),
     ///     #   executable: false,
     ///     #   rent_epoch: 1,
     ///     # });
@@ -335,9 +334,10 @@ impl Message {
             .any(|&key| key == bpf_loader_upgradeable::id())
     }
 
-    /// Returns true if the account at the specified index was requested as writable.
-    /// Before loading addresses, we can't demote write locks for dynamically loaded
-    /// addresses so this should not be used by the runtime.
+    /// Returns true if the account at the specified index was requested as
+    /// writable. Before loading addresses and without the reserved account keys
+    /// set, we can't demote write locks properly so this should not be used by
+    /// the runtime.
     pub fn is_maybe_writable(&self, key_index: usize) -> bool {
         self.is_writable_index(key_index)
             && !{
@@ -372,9 +372,7 @@ mod tests {
             account_keys: vec![Pubkey::new_unique()],
             ..Message::default()
         }
-        .sanitize(
-            true, // require_static_program_ids
-        )
+        .sanitize()
         .is_ok());
     }
 
@@ -393,9 +391,7 @@ mod tests {
             }],
             ..Message::default()
         }
-        .sanitize(
-            true, // require_static_program_ids
-        )
+        .sanitize()
         .is_ok());
     }
 
@@ -414,9 +410,7 @@ mod tests {
             }],
             ..Message::default()
         }
-        .sanitize(
-            true, // require_static_program_ids
-        )
+        .sanitize()
         .is_ok());
     }
 
@@ -441,13 +435,7 @@ mod tests {
             ..Message::default()
         };
 
-        assert!(message.sanitize(
-            false, // require_static_program_ids
-        ).is_ok());
-
-        assert!(message.sanitize(
-            true, // require_static_program_ids
-        ).is_err());
+        assert!(message.sanitize().is_err());
     }
 
     #[test]
@@ -470,9 +458,7 @@ mod tests {
             }],
             ..Message::default()
         }
-        .sanitize(
-            true, // require_static_program_ids
-        )
+        .sanitize()
         .is_ok());
     }
 
@@ -483,9 +469,7 @@ mod tests {
             account_keys: vec![Pubkey::new_unique()],
             ..Message::default()
         }
-        .sanitize(
-            true, // require_static_program_ids
-        )
+        .sanitize()
         .is_err());
     }
 
@@ -500,9 +484,7 @@ mod tests {
             account_keys: vec![Pubkey::new_unique()],
             ..Message::default()
         }
-        .sanitize(
-            true, // require_static_program_ids
-        )
+        .sanitize()
         .is_err());
     }
 
@@ -521,9 +503,7 @@ mod tests {
             }],
             ..Message::default()
         }
-        .sanitize(
-            true, // require_static_program_ids
-        )
+        .sanitize()
         .is_err());
     }
 
@@ -537,9 +517,7 @@ mod tests {
             account_keys: (0..=u8::MAX).map(|_| Pubkey::new_unique()).collect(),
             ..Message::default()
         }
-        .sanitize(
-            true, // require_static_program_ids
-        )
+        .sanitize()
         .is_ok());
     }
 
@@ -553,9 +531,7 @@ mod tests {
             account_keys: (0..=256).map(|_| Pubkey::new_unique()).collect(),
             ..Message::default()
         }
-        .sanitize(
-            true, // require_static_program_ids
-        )
+        .sanitize()
         .is_err());
     }
 
@@ -574,9 +550,7 @@ mod tests {
             }],
             ..Message::default()
         }
-        .sanitize(
-            true, // require_static_program_ids
-        )
+        .sanitize()
         .is_ok());
     }
 
@@ -595,9 +569,7 @@ mod tests {
             }],
             ..Message::default()
         }
-        .sanitize(
-            true, // require_static_program_ids
-        )
+        .sanitize()
         .is_err());
     }
 
@@ -622,12 +594,7 @@ mod tests {
             ..Message::default()
         };
 
-        assert!(message
-            .sanitize(true /* require_static_program_ids */)
-            .is_err());
-        assert!(message
-            .sanitize(false /* require_static_program_ids */)
-            .is_err());
+        assert!(message.sanitize().is_err());
     }
 
     #[test]
@@ -650,9 +617,7 @@ mod tests {
             }],
             ..Message::default()
         }
-        .sanitize(
-            true, // require_static_program_ids
-        )
+        .sanitize()
         .is_err());
     }
 

@@ -1,5 +1,8 @@
 use {
-    crate::keypair::{parse_signer_source, SignerSourceKind, ASK_KEYWORD},
+    crate::{
+        input_parsers::signer::{SignerSource, SignerSourceKind},
+        keypair::ASK_KEYWORD,
+    },
     chrono::DateTime,
     solana_sdk::{
         clock::{Epoch, Slot},
@@ -7,7 +10,7 @@ use {
         pubkey::{Pubkey, MAX_SEED_LEN},
         signature::{read_keypair_file, Signature},
     },
-    std::{fmt::Display, str::FromStr},
+    std::{fmt::Display, ops::RangeBounds, str::FromStr},
 };
 
 fn is_parsable_generic<U, T>(string: T) -> Result<(), String>
@@ -25,6 +28,7 @@ where
 
 // Return an error if string cannot be parsed as type T.
 // Takes a String to avoid second type parameter when used as a clap validator
+#[deprecated(since = "1.17.0", note = "please use `clap::value_parser!` instead")]
 pub fn is_parsable<T>(string: &str) -> Result<(), String>
 where
     T: FromStr,
@@ -35,18 +39,20 @@ where
 
 // Return an error if string cannot be parsed as numeric type T, and value not within specified
 // range
-pub fn is_within_range<T>(string: String, range_min: T, range_max: T) -> Result<(), String>
+#[deprecated(
+    since = "1.17.0",
+    note = "please use `clap::builder::RangedI64ValueParser` instead"
+)]
+pub fn is_within_range<T, R>(string: String, range: R) -> Result<(), String>
 where
     T: FromStr + Copy + std::fmt::Debug + PartialOrd + std::ops::Add<Output = T> + From<usize>,
     T::Err: Display,
+    R: RangeBounds<T> + std::fmt::Debug,
 {
     match string.parse::<T>() {
         Ok(input) => {
-            let range = range_min..range_max + 1.into();
             if !range.contains(&input) {
-                Err(format!(
-                    "input '{input:?}' out of range ({range_min:?}..{range_max:?}]"
-                ))
+                Err(format!("input '{input:?}' out of range {range:?}"))
             } else {
                 Ok(())
             }
@@ -56,11 +62,19 @@ where
 }
 
 // Return an error if a pubkey cannot be parsed.
+#[deprecated(
+    since = "1.18.0",
+    note = "please use `clap::value_parser!(Pubkey)` instead"
+)]
 pub fn is_pubkey(string: &str) -> Result<(), String> {
     is_parsable_generic::<Pubkey, _>(string)
 }
 
 // Return an error if a hash cannot be parsed.
+#[deprecated(
+    since = "1.17.0",
+    note = "please use `clap::value_parser!(Hash)` instead"
+)]
 pub fn is_hash<T>(string: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -69,6 +83,10 @@ where
 }
 
 // Return an error if a keypair file cannot be parsed.
+#[deprecated(
+    since = "1.18.0",
+    note = "please use `SignerSourceParserBuilder::default().allow_file_path().build()` instead"
+)]
 pub fn is_keypair<T>(string: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -79,6 +97,10 @@ where
 }
 
 // Return an error if a keypair file cannot be parsed
+#[deprecated(
+    since = "1.18.0",
+    note = "please use `SignerSourceParserBuilder::default().allow_file_path().allow_prompt().allow_legacy().build()` instead"
+)]
 pub fn is_keypair_or_ask_keyword<T>(string: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -92,11 +114,15 @@ where
 }
 
 // Return an error if a `SignerSourceKind::Prompt` cannot be parsed
+#[deprecated(
+    since = "1.18.0",
+    note = "please use `SignerSourceParserBuilder::default().allow_prompt().allow_legacy().build()` instead"
+)]
 pub fn is_prompt_signer_source(string: &str) -> Result<(), String> {
     if string == ASK_KEYWORD {
         return Ok(());
     }
-    match parse_signer_source(string)
+    match SignerSource::parse(string)
         .map_err(|err| format!("{err}"))?
         .kind
     {
@@ -108,6 +134,11 @@ pub fn is_prompt_signer_source(string: &str) -> Result<(), String> {
 }
 
 // Return an error if string cannot be parsed as pubkey string or keypair file location
+#[deprecated(
+    since = "1.18.0",
+    note = "please use `SignerSourceParserBuilder::default().allow_pubkey().allow_file_path().build()` instead"
+)]
+#[allow(deprecated)]
 pub fn is_pubkey_or_keypair<T>(string: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -117,11 +148,16 @@ where
 
 // Return an error if string cannot be parsed as a pubkey string, or a valid Signer that can
 // produce a pubkey()
+#[deprecated(
+    since = "1.18.0",
+    note = "please use `SignerSourceParserBuilder::default().allow_pubkey().allow_file_path().build()` instead"
+)]
+#[allow(deprecated)]
 pub fn is_valid_pubkey<T>(string: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
 {
-    match parse_signer_source(string.as_ref())
+    match SignerSource::parse(string.as_ref())
         .map_err(|err| format!("{err}"))?
         .kind
     {
@@ -138,6 +174,11 @@ where
 // when paired with an offline `--signer` argument to provide a Presigner (pubkey + signature).
 // Clap validators can't check multiple fields at once, so the verification that a `--signer` is
 // also provided and correct happens in parsing, not in validation.
+#[deprecated(
+    since = "1.18.0",
+    note = "please use `SignerSourceParserBuilder::default().build()` instead"
+)]
+#[allow(deprecated)]
 pub fn is_valid_signer<T>(string: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -146,6 +187,11 @@ where
 }
 
 // Return an error if string cannot be parsed as pubkey=signature string
+#[deprecated(
+    since = "1.17.0",
+    note = "please use `clap::value_parser!(PubkeySignature)` instead"
+)]
+#[allow(deprecated)]
 pub fn is_pubkey_sig<T>(string: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -171,6 +217,7 @@ where
 }
 
 // Return an error if a url cannot be parsed.
+#[deprecated(since = "1.17.0", note = "please use `parse_url` instead")]
 pub fn is_url<T>(string: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -187,6 +234,7 @@ where
     }
 }
 
+#[deprecated(since = "1.17.0", note = "please use `parse_url_or_moniker` instead")]
 pub fn is_url_or_moniker<T>(string: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -214,6 +262,10 @@ pub fn normalize_to_url_if_moniker<T: AsRef<str>>(url_or_moniker: T) -> String {
     .to_string()
 }
 
+#[deprecated(
+    since = "1.17.0",
+    note = "please use `clap::value_parser!(Epoch)` instead"
+)]
 pub fn is_epoch<T>(epoch: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -221,6 +273,10 @@ where
     is_parsable_generic::<Epoch, _>(epoch)
 }
 
+#[deprecated(
+    since = "1.17.0",
+    note = "please use `clap::value_parser!(Slot)` instead"
+)]
 pub fn is_slot<T>(slot: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -228,6 +284,7 @@ where
     is_parsable_generic::<Slot, _>(slot)
 }
 
+#[deprecated(since = "1.17.0", note = "please use `parse_pow2` instead")]
 pub fn is_pow2<T>(bins: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -244,6 +301,10 @@ where
         })
 }
 
+#[deprecated(
+    since = "1.17.0",
+    note = "please use `clap_value_parser!(u16)` instead"
+)]
 pub fn is_port<T>(port: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -251,6 +312,7 @@ where
     is_parsable_generic::<u16, _>(port)
 }
 
+#[deprecated(since = "1.17.0", note = "please use `parse_percentage` instead")]
 pub fn is_valid_percentage<T>(percentage: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -270,6 +332,7 @@ where
         })
 }
 
+#[deprecated(since = "1.17.0", note = "please use `Amount::parse_decimal` instead")]
 pub fn is_amount<T>(amount: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -283,6 +346,10 @@ where
     }
 }
 
+#[deprecated(
+    since = "1.17.0",
+    note = "please use `TokenAmount::parse_decimal` instead"
+)]
 pub fn is_amount_or_all<T>(amount: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -299,6 +366,7 @@ where
     }
 }
 
+#[deprecated(since = "1.17.0", note = "please use `parse_rfc3339_datetime` instead")]
 pub fn is_rfc3339_datetime<T>(value: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -308,6 +376,7 @@ where
         .map_err(|e| format!("{e}"))
 }
 
+#[deprecated(since = "1.17.0", note = "please use `parse_derivation` instead")]
 pub fn is_derivation<T>(value: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -330,6 +399,56 @@ where
         .map(|_| ())
 }
 
+#[deprecated(since = "1.17.0", note = "please use `parse_structured_seed` instead")]
+pub fn is_structured_seed<T>(value: T) -> Result<(), String>
+where
+    T: AsRef<str> + Display,
+{
+    let (prefix, value) = value
+        .as_ref()
+        .split_once(':')
+        .ok_or("Seed must contain ':' as delimiter")
+        .unwrap();
+    if prefix.is_empty() || value.is_empty() {
+        Err(String::from("Seed prefix or value is empty"))
+    } else {
+        match prefix {
+            "string" | "pubkey" | "hex" | "u8" => Ok(()),
+            _ => {
+                let len = prefix.len();
+                if len != 5 && len != 6 {
+                    Err(format!("Wrong prefix length {len} {prefix}:{value}"))
+                } else {
+                    let sign = &prefix[0..1];
+                    let type_size = &prefix[1..len.saturating_sub(2)];
+                    let byte_order = &prefix[len.saturating_sub(2)..len];
+                    if sign != "u" && sign != "i" {
+                        Err(format!("Wrong prefix sign {sign} {prefix}:{value}"))
+                    } else if type_size != "16"
+                        && type_size != "32"
+                        && type_size != "64"
+                        && type_size != "128"
+                    {
+                        Err(format!(
+                            "Wrong prefix type size {type_size} {prefix}:{value}"
+                        ))
+                    } else if byte_order != "le" && byte_order != "be" {
+                        Err(format!(
+                            "Wrong prefix byte order {byte_order} {prefix}:{value}"
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[deprecated(
+    since = "1.17.0",
+    note = "please use `parse_derived_address_seed` instead"
+)]
 pub fn is_derived_address_seed<T>(value: T) -> Result<(), String>
 where
     T: AsRef<str> + Display,
@@ -341,49 +460,5 @@ where
         ))
     } else {
         Ok(())
-    }
-}
-
-pub fn is_niceness_adjustment_valid<T>(value: T) -> Result<(), String>
-where
-    T: AsRef<str> + Display,
-{
-    let adjustment = value
-        .as_ref()
-        .parse::<i8>()
-        .map_err(|err| format!("error parsing niceness adjustment value '{value}': {err}"))?;
-    if solana_perf::thread::is_renice_allowed(adjustment) {
-        Ok(())
-    } else {
-        Err(String::from(
-            "niceness adjustment supported only on Linux; negative adjustment \
-             (priority increase) requires root or CAP_SYS_NICE (see `man 7 capabilities` \
-             for details)",
-        ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_is_derivation() {
-        assert_eq!(is_derivation("2"), Ok(()));
-        assert_eq!(is_derivation("0"), Ok(()));
-        assert_eq!(is_derivation("65537"), Ok(()));
-        assert_eq!(is_derivation("0/2"), Ok(()));
-        assert_eq!(is_derivation("0'/2'"), Ok(()));
-        assert!(is_derivation("a").is_err());
-        assert!(is_derivation("4294967296").is_err());
-        assert!(is_derivation("a/b").is_err());
-        assert!(is_derivation("0/4294967296").is_err());
-    }
-
-    #[test]
-    fn test_is_niceness_adjustment_valid() {
-        assert_eq!(is_niceness_adjustment_valid("0"), Ok(()));
-        assert!(is_niceness_adjustment_valid("128").is_err());
-        assert!(is_niceness_adjustment_valid("-129").is_err());
     }
 }

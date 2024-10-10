@@ -23,14 +23,7 @@ crate::declare_id!("ComputeBudget111111111111111111111111111111");
     Serialize,
 )]
 pub enum ComputeBudgetInstruction {
-    /// Deprecated
-    // TODO: after feature remove_deprecated_request_unit_ix::id() is activated, replace it with 'unused'
-    RequestUnitsDeprecated {
-        /// Units to request
-        units: u32,
-        /// Additional fee to add
-        additional_fee: u32,
-    },
+    Unused, // deprecated variant, reserved value.
     /// Request a specific transaction-wide program heap region size in bytes.
     /// The value requested must be a multiple of 1024. This new heap region
     /// size applies to each program executed in the transaction, including all
@@ -41,8 +34,8 @@ pub enum ComputeBudgetInstruction {
     /// Set a compute unit price in "micro-lamports" to pay a higher transaction
     /// fee for higher transaction prioritization.
     SetComputeUnitPrice(u64),
-    /// Set a specific transaction-wide account data size limit, in bytes, is allowed to allocate.
-    SetAccountsDataSizeLimit(u32),
+    /// Set a specific transaction-wide account data size limit, in bytes, is allowed to load.
+    SetLoadedAccountsDataSizeLimit(u32),
 }
 
 impl ComputeBudgetInstruction {
@@ -61,15 +54,15 @@ impl ComputeBudgetInstruction {
         Instruction::new_with_borsh(id(), &Self::SetComputeUnitPrice(micro_lamports), vec![])
     }
 
-    /// Create a `ComputeBudgetInstruction::SetAccountsDataSizeLimit` `Instruction`
-    pub fn set_accounts_data_size_limit(bytes: u32) -> Instruction {
-        Instruction::new_with_borsh(id(), &Self::SetAccountsDataSizeLimit(bytes), vec![])
-    }
-
     /// Serialize Instruction using borsh, this is only used in runtime::cost_model::tests but compilation
     /// can't be restricted as it's used across packages
-    // #[cfg(test)]
-    pub fn pack(self) -> Result<Vec<u8>, std::io::Error> {
-        self.try_to_vec()
+    #[cfg(feature = "dev-context-only-utils")]
+    pub fn pack(self) -> Result<Vec<u8>, borsh::io::Error> {
+        borsh::to_vec(&self)
+    }
+
+    /// Create a `ComputeBudgetInstruction::SetLoadedAccountsDataSizeLimit` `Instruction`
+    pub fn set_loaded_accounts_data_size_limit(bytes: u32) -> Instruction {
+        Instruction::new_with_borsh(id(), &Self::SetLoadedAccountsDataSizeLimit(bytes), vec![])
     }
 }

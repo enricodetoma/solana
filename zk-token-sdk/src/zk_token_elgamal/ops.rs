@@ -134,7 +134,7 @@ mod tests {
                 elgamal::{ElGamalCiphertext, ElGamalKeypair},
                 pedersen::{Pedersen, PedersenOpening},
             },
-            instruction::split_u64,
+            instruction::transfer::try_split_u64,
             zk_token_elgamal::{ops, pod},
         },
         bytemuck::Zeroable,
@@ -151,7 +151,8 @@ mod tests {
 
         // spendable_ct should be an encryption of 0 for any public key when
         // `PedersenOpen::default()` is used
-        let public = ElGamalKeypair::new_rand().public;
+        let keypair = ElGamalKeypair::new_rand();
+        let public = keypair.pubkey();
         let balance: u64 = 0;
         assert_eq!(
             spendable_ct,
@@ -175,7 +176,8 @@ mod tests {
 
         let added_ct = ops::add_to(&spendable_balance, 55).unwrap();
 
-        let public = ElGamalKeypair::new_rand().public;
+        let keypair = ElGamalKeypair::new_rand();
+        let public = keypair.pubkey();
         let expected: pod::ElGamalCiphertext = public
             .encrypt_with(55_u64, &PedersenOpening::default())
             .into();
@@ -186,7 +188,8 @@ mod tests {
     #[test]
     fn test_subtract_from() {
         let amount = 77_u64;
-        let public = ElGamalKeypair::new_rand().public;
+        let keypair = ElGamalKeypair::new_rand();
+        let public = keypair.pubkey();
         let open = PedersenOpening::new_rand();
         let encrypted_amount: pod::ElGamalCiphertext = public.encrypt_with(amount, &open).into();
 
@@ -201,12 +204,17 @@ mod tests {
     fn test_transfer_arithmetic() {
         // transfer amount
         let transfer_amount: u64 = 55;
-        let (amount_lo, amount_hi) = split_u64(transfer_amount, 16);
+        let (amount_lo, amount_hi) = try_split_u64(transfer_amount, 16).unwrap();
 
         // generate public keys
-        let source_pk = ElGamalKeypair::new_rand().public;
-        let dest_pk = ElGamalKeypair::new_rand().public;
-        let auditor_pk = ElGamalKeypair::new_rand().public;
+        let source_keypair = ElGamalKeypair::new_rand();
+        let source_pk = source_keypair.pubkey();
+
+        let dest_keypair = ElGamalKeypair::new_rand();
+        let dest_pk = dest_keypair.pubkey();
+
+        let auditor_keypair = ElGamalKeypair::new_rand();
+        let auditor_pk = auditor_keypair.pubkey();
 
         // commitments associated with TransferRangeProof
         let (comm_lo, open_lo) = Pedersen::new(amount_lo);
@@ -246,7 +254,7 @@ mod tests {
             source_pk.encrypt_with(22_u64, &final_source_open).into();
         assert_eq!(expected_source, final_source_spendable);
 
-        // program arithemtic for the destination account
+        // program arithmetic for the destination account
         let dest_lo_ct: pod::ElGamalCiphertext = (comm_lo, handle_dest_lo).into();
         let dest_hi_ct: pod::ElGamalCiphertext = (comm_hi, handle_dest_hi).into();
 

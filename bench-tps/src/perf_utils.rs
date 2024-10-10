@@ -23,7 +23,7 @@ pub struct SampleStats {
 }
 
 pub fn sample_txs<T>(
-    exit_signal: &Arc<AtomicBool>,
+    exit_signal: Arc<AtomicBool>,
     sample_stats: &Arc<RwLock<Vec<(String, SampleStats)>>>,
     sample_period: u64,
     client: &Arc<T>,
@@ -47,7 +47,6 @@ pub fn sample_txs<T>(
         let mut txs =
             match client.get_transaction_count_with_commitment(CommitmentConfig::processed()) {
                 Err(e) => {
-                    // ThinClient with multiple options should pick a better one now.
                     info!("Couldn't get transaction count {:?}", e);
                     sleep(Duration::from_secs(sample_period));
                     continue;

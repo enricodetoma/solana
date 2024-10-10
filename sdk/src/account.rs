@@ -1,9 +1,13 @@
 //! The Solana [`Account`] type.
 
+#[cfg(feature = "dev-context-only-utils")]
+use qualifier_attr::qualifiers;
 use {
     crate::{
+        bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable,
         clock::{Epoch, INITIAL_RENT_EPOCH},
         lamports::LamportsError,
+        loader_v4,
         pubkey::Pubkey,
     },
     serde::{
@@ -13,7 +17,9 @@ use {
     solana_program::{account_info::AccountInfo, debug_account_data::*, sysvar::Sysvar},
     std::{
         cell::{Ref, RefCell},
-        fmt, ptr,
+        fmt,
+        mem::MaybeUninit,
+        ptr,
         rc::Rc,
         sync::Arc,
     },
@@ -53,15 +59,14 @@ mod account_serialize {
         #[serde(with = "serde_bytes")]
         // a slice so we don't have to make a copy just to serialize this
         data: &'a [u8],
-        // can't be &pubkey because abi example doesn't support it
-        owner: Pubkey,
+        owner: &'a Pubkey,
         executable: bool,
         rent_epoch: Epoch,
     }
 
     /// allows us to implement serialize on AccountSharedData that is equivalent to Account::serialize without making a copy of the Vec<u8>
     pub fn serialize_account<S>(
-        account: &(impl ReadableAccount + Serialize),
+        account: &impl ReadableAccount,
         serializer: S,
     ) -> Result<S::Ok, S::Error>
     where
@@ -70,7 +75,7 @@ mod account_serialize {
         let temp = Account {
             lamports: account.lamports(),
             data: account.data(),
-            owner: *account.owner(),
+            owner: account.owner(),
             executable: account.executable(),
             rent_epoch: account.rent_epoch(),
         };
@@ -174,7 +179,6 @@ pub trait WritableAccount: ReadableAccount {
     fn saturating_sub_lamports(&mut self, lamports: u64) {
         self.set_lamports(self.lamports().saturating_sub(lamports))
     }
-    fn data_mut(&mut self) -> &mut Vec<u8>;
     fn data_as_mut_slice(&mut self) -> &mut [u8];
     fn set_owner(&mut self, owner: Pubkey);
     fn copy_into_owner_from_slice(&mut self, source: &[u8]);
@@ -228,9 +232,6 @@ impl WritableAccount for Account {
     fn set_lamports(&mut self, lamports: u64) {
         self.lamports = lamports;
     }
-    fn data_mut(&mut self) -> &mut Vec<u8> {
-        &mut self.data
-    }
     fn data_as_mut_slice(&mut self) -> &mut [u8] {
         &mut self.data
     }
@@ -266,9 +267,6 @@ impl WritableAccount for Account {
 impl WritableAccount for AccountSharedData {
     fn set_lamports(&mut self, lamports: u64) {
         self.lamports = lamports;
-    }
-    fn data_mut(&mut self) -> &mut Vec<u8> {
-        Arc::make_mut(&mut self.data)
     }
     fn data_as_mut_slice(&mut self) -> &mut [u8] {
         &mut self.data_mut()[..]
@@ -540,13 +538,36 @@ impl Account {
 }
 
 impl AccountSharedData {
+    pub fn is_shared(&self) -> bool {
+        Arc::strong_count(&self.data) > 1
+    }
+
+    pub fn reserve(&mut self, additional: usize) {
+        self.data_mut().reserve(additional)
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.data.capacity()
+    }
+
+    fn data_mut(&mut self) -> &mut Vec<u8> {
+        Arc::make_mut(&mut self.data)
+    }
+
+    pub fn resize(&mut self, new_len: usize, value: u8) {
+        self.data_mut().resize(new_len, value)
+    }
+
+    pub fn extend_from_slice(&mut self, data: &[u8]) {
+        self.data_mut().extend_from_slice(data)
+    }
+
     pub fn set_data_from_slice(&mut self, new_data: &[u8]) {
-        let data = match Arc::get_mut(&mut self.data) {
-            // The buffer isn't shared, so we're going to memcpy in place.
-            Some(data) => data,
+        // If the buffer isn't shared, we're going to memcpy in place.
+        let Some(data) = Arc::get_mut(&mut self.data) else {
             // If the buffer is shared, the cheapest thing to do is to clone the
             // incoming slice and replace the buffer.
-            None => return self.set_data(new_data.to_vec()),
+            return self.set_data(new_data.to_vec());
         };
 
         let new_len = new_data.len();
@@ -580,8 +601,13 @@ impl AccountSharedData {
         };
     }
 
-    pub fn set_data(&mut self, data: Vec<u8>) {
+    #[cfg_attr(feature = "dev-context-only-utils", qualifiers(pub))]
+    fn set_data(&mut self, data: Vec<u8>) {
         self.data = Arc::new(data);
+    }
+
+    pub fn spare_data_capacity_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+        self.data_mut().spare_capacity_mut()
     }
 
     pub fn new(lamports: u64, space: usize, owner: &Pubkey) -> Self {
@@ -728,6 +754,14 @@ pub fn create_is_signer_account_infos<'a>(
         })
         .collect()
 }
+
+/// Replacement for the executable flag: An account being owned by one of these contains a program.
+pub const PROGRAM_OWNERS: &[Pubkey] = &[
+    bpf_loader_upgradeable::id(),
+    bpf_loader::id(),
+    bpf_loader_deprecated::id(),
+    loader_v4::id(),
+];
 
 #[cfg(test)]
 pub mod tests {

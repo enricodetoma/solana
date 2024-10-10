@@ -37,11 +37,17 @@ fn rerun_if_changed(files: &[&str], directories: &[&str], excludes: &[&str]) {
 }
 
 fn main() {
+    if env::var("CARGO_FEATURE_DUMMY_FOR_CI_CHECK").is_ok() {
+        println!("cargo:warning=(not a warning) Compiling with host toolchain for CI...");
+        return;
+    }
+
+    let build_profile = env::var("PROFILE").expect("`PROFILE` envvar to be set");
+    let install_dir = format!("target/{build_profile}/sbf");
     let sbf_c = env::var("CARGO_FEATURE_SBF_C").is_ok();
     if sbf_c {
-        let install_dir = "OUT_DIR=../target/".to_string() + &env::var("PROFILE").unwrap() + "/sbf";
-
-        println!("cargo:warning=(not a warning) Building C-based SBF programs");
+        let install_dir = format!("OUT_DIR=../{install_dir}");
+        println!("cargo:warning=(not a warning) Building C-based on-chain programs");
         assert!(Command::new("make")
             .current_dir("c")
             .arg("programs")
@@ -55,12 +61,12 @@ fn main() {
 
     let sbf_rust = env::var("CARGO_FEATURE_SBF_RUST").is_ok();
     if sbf_rust {
-        let install_dir = "target/".to_string() + &env::var("PROFILE").unwrap() + "/sbf";
-
         let rust_programs = [
             "128bit",
             "alloc",
             "alt_bn128",
+            "alt_bn128_compression",
+            "big_mod_exp",
             "call_depth",
             "caller_access",
             "curve25519",
@@ -87,9 +93,11 @@ fn main() {
             "noop",
             "panic",
             "param_passing",
+            "poseidon",
             "rand",
             "realloc",
             "realloc_invoke",
+            "remaining_compute_units",
             "ro_modify",
             "ro_account_modify",
             "sanity",
@@ -104,7 +112,7 @@ fn main() {
             "upgraded",
         ];
         for program in rust_programs.iter() {
-            println!("cargo:warning=(not a warning) Building Rust-based SBF programs: solana_sbf_rust_{program}");
+            println!("cargo:warning=(not a warning) Building Rust-based on-chain programs: solana_sbf_rust_{program}");
             assert!(Command::new("../../cargo-build-sbf")
                 .args([
                     "--manifest-path",

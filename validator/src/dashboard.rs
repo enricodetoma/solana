@@ -71,14 +71,13 @@ impl Dashboard {
             let progress_bar = new_spinner_progress_bar();
             progress_bar.set_message("Connecting...");
 
-            let (rpc_addr, start_time) = match runtime.block_on(wait_for_validator_startup(
+            let Some((rpc_addr, start_time)) = runtime.block_on(wait_for_validator_startup(
                 &ledger_path,
                 &exit,
                 progress_bar,
                 refresh_interval,
-            )) {
-                None => continue,
-                Some(results) => results,
+            )) else {
+                continue;
             };
 
             let rpc_client = RpcClient::new_socket(rpc_addr);
@@ -111,6 +110,9 @@ impl Dashboard {
                 }
                 if let Some(rpc) = contact_info.rpc {
                     println_name_value("JSON RPC URL:", &format!("http://{rpc}"));
+                }
+                if let Some(pubsub) = contact_info.pubsub {
+                    println_name_value("WebSocket PubSub URL:", &format!("ws://{pubsub}"));
                 }
             }
 
@@ -152,10 +154,9 @@ impl Dashboard {
                         };
 
                         progress_bar.set_message(format!(
-                            "{}{}| \
-                                    Processed Slot: {} | Confirmed Slot: {} | Finalized Slot: {} | \
-                                    Full Snapshot Slot: {} | Incremental Snapshot Slot: {} | \
-                                    Transactions: {} | {}",
+                            "{}{}| Processed Slot: {} | Confirmed Slot: {} | Finalized Slot: {} | \
+                             Full Snapshot Slot: {} | Incremental Snapshot Slot: {} | \
+                             Transactions: {} | {}",
                             uptime,
                             if health == "ok" {
                                 "".to_string()
@@ -192,7 +193,7 @@ impl Dashboard {
 
 async fn wait_for_validator_startup(
     ledger_path: &Path,
-    exit: &Arc<AtomicBool>,
+    exit: &AtomicBool,
     progress_bar: ProgressBar,
     refresh_interval: Duration,
 ) -> Option<(SocketAddr, SystemTime)> {
@@ -218,13 +219,13 @@ async fn wait_for_validator_startup(
                 if start_progress == ValidatorStartProgress::Running {
                     let admin_client = admin_client.take().unwrap();
 
-                    match async move {
+                    let validator_info = async move {
                         let rpc_addr = admin_client.rpc_addr().await?;
                         let start_time = admin_client.start_time().await?;
                         Ok::<_, jsonrpc_core_client::RpcError>((rpc_addr, start_time))
                     }
-                    .await
-                    {
+                    .await;
+                    match validator_info {
                         Ok((None, _)) => progress_bar.set_message("RPC service not available"),
                         Ok((Some(rpc_addr), start_time)) => return Some((rpc_addr, start_time)),
                         Err(err) => {

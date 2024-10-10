@@ -26,6 +26,8 @@ usage() {
                                          -c bench-tps=2="--tx_count 25000"
                                      This will start 2 bench-tps clients, and supply "--tx_count 25000"
                                      to the bench-tps client.
+--use-unstaked-connection          - Use unstaked connection. By default, staked connection with
+                                     bootstrap node credendials is used.
 EOM
 )
   cat <<EOF
@@ -72,7 +74,8 @@ Operate a configured testnet
    --faucet-lamports NUM_LAMPORTS_TO_MINT
                                       - Override the default 500000000000000000 lamports minted in genesis
    --extra-primordial-stakes NUM_EXTRA_PRIMORDIAL_STAKES
-                                      - Number of extra nodes to be initially staked in genesis.
+                                      - Number of nodes to be initially staked in genesis.
+                                        Gives extra stake in genesis to NUM_EXTRA_PRIMORDIAL_STAKES many nodes.
                                         Implies --wait-for-supermajority 1 --async-node-init and the supermajority
                                         wait slot may be overridden with the corresponding flag
    --internal-nodes-stake-lamports NUM_LAMPORTS_PER_NODE
@@ -113,6 +116,9 @@ Operate a configured testnet
 
    --tpu-enable-udp
                                       - Enable UDP for tpu transactions
+
+   --client-type
+                                      - Specify backend client type for bench-tps. Valid options are (rpc-client|tpu-client), tpu-client is default
 
  sanity/start-specific options:
    -F                   - Discard validator nodes that didn't bootup successfully
@@ -185,7 +191,7 @@ build() {
   if [[ $(uname) != Linux || ! " ${supported[*]} " =~ $(lsb_release -sr) ]]; then
     # shellcheck source=ci/rust-version.sh
     source "$SOLANA_ROOT"/ci/rust-version.sh
-    MAYBE_DOCKER="ci/docker-run.sh $rust_stable_docker_image"
+    MAYBE_DOCKER="ci/docker-run.sh ${ci_docker_image:?}"
   fi
   SECONDS=0
   (
@@ -228,29 +234,37 @@ build() {
   echo "Build took $SECONDS seconds"
 }
 
-SOLANA_HOME="\$HOME/solana"
-CARGO_BIN="\$HOME/.cargo/bin"
+remoteHomeDir() {
+  declare ipAddress=$1
+  declare remoteHome
+  remoteHome="$(ssh "${sshOptions[@]}" "$ipAddress" "echo \$HOME")"
+  echo "$remoteHome"
+}
 
 startCommon() {
   declare ipAddress=$1
+  declare remoteHome
+  remoteHome=$(remoteHomeDir "$ipAddress")
+  local remoteSolanaHome="${remoteHome}/solana"
+  local remoteCargoBin="${remoteHome}/.cargo/bin"
   test -d "$SOLANA_ROOT"
   if $skipSetup; then
     # shellcheck disable=SC2029
     ssh "${sshOptions[@]}" "$ipAddress" "
       set -x;
-      mkdir -p $SOLANA_HOME/config;
+      mkdir -p $remoteSolanaHome/config;
       rm -rf ~/config;
-      mv $SOLANA_HOME/config ~;
-      rm -rf $SOLANA_HOME;
-      mkdir -p $SOLANA_HOME $CARGO_BIN;
-      mv ~/config $SOLANA_HOME/
+      mv $remoteSolanaHome/config ~;
+      rm -rf $remoteSolanaHome;
+      mkdir -p $remoteSolanaHome $remoteCargoBin;
+      mv ~/config $remoteSolanaHome/
     "
   else
     # shellcheck disable=SC2029
     ssh "${sshOptions[@]}" "$ipAddress" "
       set -x;
-      rm -rf $SOLANA_HOME;
-      mkdir -p $CARGO_BIN
+      rm -rf $remoteSolanaHome;
+      mkdir -p $remoteCargoBin
     "
   fi
   [[ -z "$externalNodeSshKey" ]] || ssh-copy-id -f -i "$externalNodeSshKey" "${sshOptions[@]}" "solana@$ipAddress"
@@ -260,10 +274,13 @@ startCommon() {
 syncScripts() {
   echo "rsyncing scripts... to $ipAddress"
   declare ipAddress=$1
+  declare remoteHome
+  remoteHome=$(remoteHomeDir "$ipAddress")
+  local remoteSolanaHome="${remoteHome}/solana"
   rsync -vPrc -e "ssh ${sshOptions[*]}" \
     --exclude 'net/log*' \
     "$SOLANA_ROOT"/{fetch-perf-libs.sh,fetch-spl.sh,scripts,net,multinode-demo} \
-    "$ipAddress":"$SOLANA_HOME"/ > /dev/null
+    "$ipAddress":"$remoteSolanaHome"/ > /dev/null
 }
 
 # Deploy local binaries to bootstrap validator.  Other validators and clients later fetch the
@@ -271,14 +288,18 @@ syncScripts() {
 deployBootstrapValidator() {
   declare ipAddress=$1
 
+  declare remoteHome
+  remoteHome=$(remoteHomeDir "$ipAddress")
+  local remoteCargoBin="${remoteHome}/.cargo/bin"
+
   echo "Deploying software to bootstrap validator ($ipAddress)"
   case $deployMethod in
   tar)
-    rsync -vPrc -e "ssh ${sshOptions[*]}" "$SOLANA_ROOT"/solana-release/bin/* "$ipAddress:$CARGO_BIN/"
+    rsync -vPrc -e "ssh ${sshOptions[*]}" "$SOLANA_ROOT"/solana-release/bin/* "$ipAddress:$remoteCargoBin/"
     rsync -vPrc -e "ssh ${sshOptions[*]}" "$SOLANA_ROOT"/solana-release/version.yml "$ipAddress:~/"
     ;;
   local)
-    rsync -vPrc -e "ssh ${sshOptions[*]}" "$SOLANA_ROOT"/farf/bin/* "$ipAddress:$CARGO_BIN/"
+    rsync -vPrc -e "ssh ${sshOptions[*]}" "$SOLANA_ROOT"/farf/bin/* "$ipAddress:$remoteCargoBin/"
     rsync -vPrc -e "ssh ${sshOptions[*]}" "$SOLANA_ROOT"/farf/version.yml "$ipAddress:~/"
     ;;
   skip)
@@ -320,7 +341,7 @@ startBootstrapLeader() {
          $nodeIndex \
          ${#clientIpList[@]} \"$benchTpsExtraArgs\" \
          \"$genesisOptions\" \
-         \"$maybeNoSnapshot $maybeSkipLedgerVerify $maybeLimitLedgerSize $maybeWaitForSupermajority $maybeAllowPrivateAddr $maybeAccountsDbSkipShrink $maybeSkipRequireTower\" \
+         \"$maybeNoSnapshot $maybeSkipLedgerVerify $maybeLimitLedgerSize $maybeWaitForSupermajority $maybeAccountsDbSkipShrink $maybeSkipRequireTower\" \
          \"$gpuMode\" \
          \"$maybeWarpSlot\" \
          \"$maybeFullRpc\" \
@@ -371,7 +392,7 @@ startNode() {
         timeout 30s scp "${sshOptions[@]}" "$localArchive" "$ipAddress:letsencrypt.tgz"
       fi
       ssh "${sshOptions[@]}" -n "$ipAddress" \
-        "sudo -H /certbot-restore.sh $letsEncryptDomainName maintainers@solana.foundation"
+        "sudo -H /certbot-restore.sh $letsEncryptDomainName maintainers@solanalabs.com"
       rm -f letsencrypt.tgz
       timeout 30s scp "${sshOptions[@]}" "$ipAddress:/letsencrypt.tgz" letsencrypt.tgz
       test -s letsencrypt.tgz # Ensure non-empty before overwriting $localArchive
@@ -394,7 +415,7 @@ startNode() {
          $nodeIndex \
          ${#clientIpList[@]} \"$benchTpsExtraArgs\" \
          \"$genesisOptions\" \
-         \"$maybeNoSnapshot $maybeSkipLedgerVerify $maybeLimitLedgerSize $maybeWaitForSupermajority $maybeAllowPrivateAddr $maybeAccountsDbSkipShrink $maybeSkipRequireTower\" \
+         \"$maybeNoSnapshot $maybeSkipLedgerVerify $maybeLimitLedgerSize $maybeWaitForSupermajority $maybeAccountsDbSkipShrink $maybeSkipRequireTower\" \
          \"$gpuMode\" \
          \"$maybeWarpSlot\" \
          \"$maybeFullRpc\" \
@@ -425,7 +446,8 @@ startClient() {
     startCommon "$ipAddress"
     ssh "${sshOptions[@]}" -f "$ipAddress" \
       "./solana/net/remote/remote-client.sh $deployMethod $entrypointIp \
-      $clientToRun \"$RUST_LOG\" \"$benchTpsExtraArgs\" $clientIndex $clientType"
+      $clientToRun \"$RUST_LOG\" \"$benchTpsExtraArgs\" $clientIndex $clientType \
+      $maybeUseUnstakedConnection"
   ) >> "$logFile" 2>&1 || {
     cat "$logFile"
     echo "^^^ +++"
@@ -794,7 +816,6 @@ maybeLimitLedgerSize=""
 maybeSkipLedgerVerify=""
 maybeDisableAirdrops=""
 maybeWaitForSupermajority=""
-maybeAllowPrivateAddr=""
 maybeAccountsDbSkipShrink=""
 maybeSkipRequireTower=""
 debugBuild=false
@@ -813,7 +834,8 @@ waitForNodeInit=true
 extraPrimordialStakes=0
 disableQuic=false
 enableUdp=false
-clientType=thin-client
+clientType=tpu-client
+maybeUseUnstakedConnection=""
 
 command=$1
 [[ -n $command ]] || usage
@@ -939,9 +961,7 @@ while [[ -n $1 ]]; do
       extraPrimordialStakes=$2
       shift 2
     elif [[ $1 = --allow-private-addr ]]; then
-      # May also be added by loadConfigFile if 'gce.sh create' was invoked
-      # without -P.
-      maybeAllowPrivateAddr="$1"
+      echo "--allow-private-addr is a default value"
       shift 1
     elif [[ $1 = --accounts-db-skip-shrink ]]; then
       maybeAccountsDbSkipShrink="$1"
@@ -952,7 +972,7 @@ while [[ -n $1 ]]; do
     elif [[ $1 = --client-type ]]; then
       clientType=$2
       case "$clientType" in
-        thin-client|tpu-client|rpc-client)
+        tpu-client|rpc-client)
           ;;
         *)
           echo "Unexpected client type: \"$clientType\""
@@ -960,6 +980,9 @@ while [[ -n $1 ]]; do
           ;;
       esac
       shift 2
+    elif [[ $1 = --use-unstaked-connection ]]; then
+      maybeUseUnstakedConnection="$1"
+      shift 1
     else
       usage "Unknown long option: $1"
     fi
@@ -1178,7 +1201,9 @@ netem)
     remoteNetemConfigFile="$(basename "$netemConfigFile")"
     if [[ $netemCommand = "add" ]]; then
       for ipAddress in "${validatorIpList[@]}"; do
-        "$here"/scp.sh "$netemConfigFile" solana@"$ipAddress":"$SOLANA_HOME"
+        remoteHome=$(remoteHomeDir "$ipAddress")
+        remoteSolanaHome="${remoteHome}/solana"
+        "$here"/scp.sh "$netemConfigFile" solana@"$ipAddress":"$remoteSolanaHome"
       done
     fi
     for i in "${!validatorIpList[@]}"; do

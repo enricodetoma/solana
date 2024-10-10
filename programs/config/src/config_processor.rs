@@ -3,18 +3,17 @@
 use {
     crate::ConfigKeys,
     bincode::deserialize,
-    solana_program_runtime::{ic_msg, invoke_context::InvokeContext},
+    solana_program_runtime::{declare_process_instruction, ic_msg},
     solana_sdk::{
-        feature_set, instruction::InstructionError, program_utils::limited_deserialize,
-        pubkey::Pubkey, transaction_context::IndexOfAccount,
+        instruction::InstructionError, program_utils::limited_deserialize, pubkey::Pubkey,
+        transaction_context::IndexOfAccount,
     },
     std::collections::BTreeSet,
 };
 
-pub fn process_instruction(
-    _first_instruction_account: IndexOfAccount,
-    invoke_context: &mut InvokeContext,
-) -> Result<(), InstructionError> {
+pub const DEFAULT_COMPUTE_UNITS: u64 = 450;
+
+declare_process_instruction!(Entrypoint, DEFAULT_COMPUTE_UNITS, |invoke_context| {
     let transaction_context = &invoke_context.transaction_context;
     let instruction_context = transaction_context.get_current_instruction_context()?;
     let data = instruction_context.get_instruction_data();
@@ -103,16 +102,12 @@ pub fn process_instruction(
         }
     }
 
-    if invoke_context
-        .feature_set
-        .is_active(&feature_set::dedupe_config_program_signers::id())
-    {
-        let total_new_keys = key_list.keys.len();
-        let unique_new_keys = key_list.keys.into_iter().collect::<BTreeSet<_>>();
-        if unique_new_keys.len() != total_new_keys {
-            ic_msg!(invoke_context, "new config contains duplicate keys");
-            return Err(InstructionError::InvalidArgument);
-        }
+    // dedupe signers
+    let total_new_keys = key_list.keys.len();
+    let unique_new_keys = key_list.keys.into_iter().collect::<BTreeSet<_>>();
+    if unique_new_keys.len() != total_new_keys {
+        ic_msg!(invoke_context, "new config contains duplicate keys");
+        return Err(InstructionError::InvalidArgument);
     }
 
     // Check for Config data signers not present in incoming account update
@@ -134,7 +129,7 @@ pub fn process_instruction(
     }
     config_account.get_data_mut()?[..data.len()].copy_from_slice(data);
     Ok(())
-}
+});
 
 #[cfg(test)]
 mod tests {
@@ -165,10 +160,10 @@ mod tests {
             instruction_data,
             transaction_accounts,
             instruction_accounts,
-            None,
-            None,
             expected_result,
-            super::process_instruction,
+            Entrypoint::vm,
+            |_invoke_context| {},
+            |_invoke_context| {},
         )
     }
 
@@ -203,13 +198,13 @@ mod tests {
         let instructions =
             config_instruction::create_account::<MyConfig>(&from_pubkey, &config_pubkey, 1, keys);
         let system_instruction = limited_deserialize(&instructions[0].data).unwrap();
-        let space = match system_instruction {
-            SystemInstruction::CreateAccount {
-                lamports: _,
-                space,
-                owner: _,
-            } => space,
-            _ => panic!("Not a CreateAccount system instruction"),
+        let SystemInstruction::CreateAccount {
+            lamports: _,
+            space,
+            owner: _,
+        } = system_instruction
+        else {
+            panic!("Not a CreateAccount system instruction")
         };
         let config_account = AccountSharedData::new(0, space as usize, &id());
         let accounts = process_instruction(

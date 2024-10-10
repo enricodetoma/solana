@@ -1,35 +1,34 @@
 use {
     crate::{
         nonblocking::quic::ALPN_TPU_PROTOCOL_ID, streamer::StakedNodes,
-        tls_certificates::new_self_signed_tls_certificate_chain,
+        tls_certificates::new_dummy_x509_certificate,
     },
     crossbeam_channel::Sender,
     pem::Pem,
-    quinn::{Endpoint, IdleTimeout, ServerConfig, VarInt},
-    rustls::{server::ClientCertVerified, Certificate, DistinguishedNames},
+    quinn::{Endpoint, IdleTimeout, ServerConfig},
+    rustls::{server::ClientCertVerified, Certificate, DistinguishedName},
     solana_perf::packet::PacketBatch,
     solana_sdk::{
         packet::PACKET_DATA_SIZE,
-        quic::{QUIC_MAX_TIMEOUT_MS, QUIC_MAX_UNSTAKED_CONCURRENT_STREAMS},
+        quic::{NotifyKeyUpdate, QUIC_MAX_TIMEOUT, QUIC_MAX_UNSTAKED_CONCURRENT_STREAMS},
         signature::Keypair,
     },
     std::{
-        net::{IpAddr, UdpSocket},
+        net::UdpSocket,
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc, RwLock,
         },
         thread,
-        time::SystemTime,
+        time::{Duration, SystemTime},
     },
-    tokio::runtime::{Builder, Runtime},
+    tokio::runtime::Runtime,
 };
 
 pub const MAX_STAKED_CONNECTIONS: usize = 2000;
 pub const MAX_UNSTAKED_CONNECTIONS: usize = 500;
-const NUM_QUIC_STREAMER_WORKER_THREADS: usize = 1;
 
-struct SkipClientVerification;
+pub struct SkipClientVerification;
 
 impl SkipClientVerification {
     pub fn new() -> Arc<Self> {
@@ -37,9 +36,15 @@ impl SkipClientVerification {
     }
 }
 
+pub struct SpawnServerResult {
+    pub endpoint: Endpoint,
+    pub thread: thread::JoinHandle<()>,
+    pub key_updater: Arc<EndpointKeyUpdater>,
+}
+
 impl rustls::server::ClientCertVerifier for SkipClientVerification {
-    fn client_auth_root_subjects(&self) -> Option<DistinguishedNames> {
-        Some(DistinguishedNames::new())
+    fn client_auth_root_subjects(&self) -> &[DistinguishedName] {
+        &[]
     }
 
     fn verify_client_cert(
@@ -56,28 +61,22 @@ impl rustls::server::ClientCertVerifier for SkipClientVerification {
 #[allow(clippy::field_reassign_with_default)] // https://github.com/rust-lang/rust-clippy/issues/6527
 pub(crate) fn configure_server(
     identity_keypair: &Keypair,
-    gossip_host: IpAddr,
 ) -> Result<(ServerConfig, String), QuicServerError> {
-    let (cert_chain, priv_key) =
-        new_self_signed_tls_certificate_chain(identity_keypair, gossip_host)
-            .map_err(|_e| QuicServerError::ConfigureFailed)?;
-    let cert_chain_pem_parts: Vec<Pem> = cert_chain
-        .iter()
-        .map(|cert| Pem {
-            tag: "CERTIFICATE".to_string(),
-            contents: cert.0.clone(),
-        })
-        .collect();
+    let (cert, priv_key) = new_dummy_x509_certificate(identity_keypair);
+    let cert_chain_pem_parts = vec![Pem {
+        tag: "CERTIFICATE".to_string(),
+        contents: cert.0.clone(),
+    }];
     let cert_chain_pem = pem::encode_many(&cert_chain_pem_parts);
 
     let mut server_tls_config = rustls::ServerConfig::builder()
         .with_safe_defaults()
         .with_client_cert_verifier(SkipClientVerification::new())
-        .with_single_cert(cert_chain, priv_key)
-        .map_err(|_e| QuicServerError::ConfigureFailed)?;
+        .with_single_cert(vec![cert], priv_key)?;
     server_tls_config.alpn_protocols = vec![ALPN_TPU_PROTOCOL_ID.to_vec()];
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(server_tls_config));
+    server_config.use_retry(true);
     let config = Arc::get_mut(&mut server_config.transport).unwrap();
 
     // QUIC_MAX_CONCURRENT_STREAMS doubled, which was found to improve reliability
@@ -90,7 +89,7 @@ pub(crate) fn configure_server(
             .saturating_mul(MAX_CONCURRENT_UNI_STREAMS)
             .into(),
     );
-    let timeout = IdleTimeout::from(VarInt::from_u32(QUIC_MAX_TIMEOUT_MS));
+    let timeout = IdleTimeout::try_from(QUIC_MAX_TIMEOUT).unwrap();
     config.max_idle_timeout(Some(timeout));
 
     // disable bidi & datagrams
@@ -101,10 +100,9 @@ pub(crate) fn configure_server(
     Ok((server_config, cert_chain_pem))
 }
 
-fn rt() -> Runtime {
-    Builder::new_multi_thread()
-        .worker_threads(NUM_QUIC_STREAMER_WORKER_THREADS)
-        .thread_name("quic-server")
+fn rt(name: String) -> Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_name(name)
         .enable_all()
         .build()
         .unwrap()
@@ -112,11 +110,22 @@ fn rt() -> Runtime {
 
 #[derive(thiserror::Error, Debug)]
 pub enum QuicServerError {
-    #[error("Server configure failed")]
-    ConfigureFailed,
+    #[error("Endpoint creation failed: {0}")]
+    EndpointFailed(std::io::Error),
+    #[error("TLS error: {0}")]
+    TlsError(#[from] rustls::Error),
+}
 
-    #[error("Endpoint creation failed")]
-    EndpointFailed,
+pub struct EndpointKeyUpdater {
+    endpoint: Endpoint,
+}
+
+impl NotifyKeyUpdate for EndpointKeyUpdater {
+    fn update_key(&self, key: &Keypair) -> Result<(), Box<dyn std::error::Error>> {
+        let (config, _) = configure_server(key)?;
+        self.endpoint.set_server_config(Some(config));
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -128,12 +137,20 @@ pub struct StreamStats {
     pub(crate) total_invalid_chunks: AtomicUsize,
     pub(crate) total_invalid_chunk_size: AtomicUsize,
     pub(crate) total_packets_allocated: AtomicUsize,
+    pub(crate) total_packet_batches_allocated: AtomicUsize,
     pub(crate) total_chunks_received: AtomicUsize,
     pub(crate) total_staked_chunks_received: AtomicUsize,
     pub(crate) total_unstaked_chunks_received: AtomicUsize,
     pub(crate) total_packet_batch_send_err: AtomicUsize,
+    pub(crate) total_handle_chunk_to_packet_batcher_send_err: AtomicUsize,
     pub(crate) total_packet_batches_sent: AtomicUsize,
     pub(crate) total_packet_batches_none: AtomicUsize,
+    pub(crate) total_packets_sent_for_batching: AtomicUsize,
+    pub(crate) total_bytes_sent_for_batching: AtomicUsize,
+    pub(crate) total_chunks_sent_for_batching: AtomicUsize,
+    pub(crate) total_packets_sent_to_consumer: AtomicUsize,
+    pub(crate) total_bytes_sent_to_consumer: AtomicUsize,
+    pub(crate) total_chunks_processed_by_batcher: AtomicUsize,
     pub(crate) total_stream_read_errors: AtomicUsize,
     pub(crate) total_stream_read_timeouts: AtomicUsize,
     pub(crate) num_evictions: AtomicUsize,
@@ -146,14 +163,24 @@ pub struct StreamStats {
     pub(crate) connection_add_failed_on_pruning: AtomicUsize,
     pub(crate) connection_setup_timeout: AtomicUsize,
     pub(crate) connection_setup_error: AtomicUsize,
+    pub(crate) connection_setup_error_closed: AtomicUsize,
+    pub(crate) connection_setup_error_timed_out: AtomicUsize,
+    pub(crate) connection_setup_error_transport: AtomicUsize,
+    pub(crate) connection_setup_error_app_closed: AtomicUsize,
+    pub(crate) connection_setup_error_reset: AtomicUsize,
+    pub(crate) connection_setup_error_locally_closed: AtomicUsize,
     pub(crate) connection_removed: AtomicUsize,
     pub(crate) connection_remove_failed: AtomicUsize,
+    pub(crate) throttled_streams: AtomicUsize,
+    pub(crate) stream_load_ema: AtomicUsize,
+    pub(crate) stream_load_ema_overflow: AtomicUsize,
+    pub(crate) stream_load_capacity_overflow: AtomicUsize,
 }
 
 impl StreamStats {
-    pub fn report(&self) {
+    pub fn report(&self, name: &'static str) {
         datapoint_info!(
-            "quic-connections",
+            name,
             (
                 "active_connections",
                 self.total_connections.load(Ordering::Relaxed),
@@ -241,6 +268,41 @@ impl StreamStats {
                 i64
             ),
             (
+                "connection_setup_error_timed_out",
+                self.connection_setup_error_timed_out
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "connection_setup_error_closed",
+                self.connection_setup_error_closed
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "connection_setup_error_transport",
+                self.connection_setup_error_transport
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "connection_setup_error_app_closed",
+                self.connection_setup_error_app_closed
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "connection_setup_error_reset",
+                self.connection_setup_error_reset.swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "connection_setup_error_locally_closed",
+                self.connection_setup_error_locally_closed
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
                 "invalid_chunk",
                 self.total_invalid_chunks.swap(0, Ordering::Relaxed),
                 i64
@@ -253,6 +315,47 @@ impl StreamStats {
             (
                 "packets_allocated",
                 self.total_packets_allocated.swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "packet_batches_allocated",
+                self.total_packet_batches_allocated
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "packets_sent_for_batching",
+                self.total_packets_sent_for_batching
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "bytes_sent_for_batching",
+                self.total_bytes_sent_for_batching
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "chunks_sent_for_batching",
+                self.total_chunks_sent_for_batching
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "packets_sent_to_consumer",
+                self.total_packets_sent_to_consumer
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "bytes_sent_to_consumer",
+                self.total_bytes_sent_to_consumer.swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "chunks_processed_by_batcher",
+                self.total_chunks_processed_by_batcher
+                    .swap(0, Ordering::Relaxed),
                 i64
             ),
             (
@@ -277,6 +380,12 @@ impl StreamStats {
                 i64
             ),
             (
+                "handle_chunk_to_packet_batcher_send_error",
+                self.total_handle_chunk_to_packet_batcher_send_err
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
                 "packet_batches_sent",
                 self.total_packet_batches_sent.swap(0, Ordering::Relaxed),
                 i64
@@ -296,56 +405,87 @@ impl StreamStats {
                 self.total_stream_read_timeouts.swap(0, Ordering::Relaxed),
                 i64
             ),
+            (
+                "throttled_streams",
+                self.throttled_streams.swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "stream_load_ema",
+                self.stream_load_ema.load(Ordering::Relaxed),
+                i64
+            ),
+            (
+                "stream_load_ema_overflow",
+                self.stream_load_ema_overflow.load(Ordering::Relaxed),
+                i64
+            ),
+            (
+                "stream_load_capacity_overflow",
+                self.stream_load_capacity_overflow.load(Ordering::Relaxed),
+                i64
+            ),
         );
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_server(
+    thread_name: &'static str,
+    metrics_name: &'static str,
     sock: UdpSocket,
     keypair: &Keypair,
-    gossip_host: IpAddr,
     packet_sender: Sender<PacketBatch>,
     exit: Arc<AtomicBool>,
     max_connections_per_peer: usize,
     staked_nodes: Arc<RwLock<StakedNodes>>,
     max_staked_connections: usize,
     max_unstaked_connections: usize,
-    stats: Arc<StreamStats>,
-    wait_for_chunk_timeout_ms: u64,
-) -> Result<(Endpoint, thread::JoinHandle<()>), QuicServerError> {
-    let runtime = rt();
-    let (endpoint, task) = {
+    wait_for_chunk_timeout: Duration,
+    coalesce: Duration,
+) -> Result<SpawnServerResult, QuicServerError> {
+    let runtime = rt(format!("{thread_name}Rt"));
+    let (endpoint, _stats, task) = {
         let _guard = runtime.enter();
         crate::nonblocking::quic::spawn_server(
+            metrics_name,
             sock,
             keypair,
-            gossip_host,
             packet_sender,
             exit,
             max_connections_per_peer,
             staked_nodes,
             max_staked_connections,
             max_unstaked_connections,
-            stats,
-            wait_for_chunk_timeout_ms,
+            wait_for_chunk_timeout,
+            coalesce,
         )
     }?;
     let handle = thread::Builder::new()
-        .name("solQuicServer".into())
+        .name(thread_name.into())
         .spawn(move || {
             if let Err(e) = runtime.block_on(task) {
                 warn!("error from runtime.block_on: {:?}", e);
             }
         })
         .unwrap();
-    Ok((endpoint, handle))
+    let updater = EndpointKeyUpdater {
+        endpoint: endpoint.clone(),
+    };
+    Ok(SpawnServerResult {
+        endpoint,
+        thread: handle,
+        key_updater: Arc::new(updater),
+    })
 }
 
 #[cfg(test)]
 mod test {
     use {
-        super::*, crate::nonblocking::quic::test::*, crossbeam_channel::unbounded,
+        super::*,
+        crate::nonblocking::quic::{test::*, DEFAULT_WAIT_FOR_CHUNK_TIMEOUT},
+        crossbeam_channel::unbounded,
+        solana_sdk::net::DEFAULT_TPU_COALESCE,
         std::net::SocketAddr,
     };
 
@@ -359,22 +499,25 @@ mod test {
         let exit = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = unbounded();
         let keypair = Keypair::new();
-        let ip = "127.0.0.1".parse().unwrap();
         let server_address = s.local_addr().unwrap();
         let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
-        let stats = Arc::new(StreamStats::default());
-        let (_, t) = spawn_server(
+        let SpawnServerResult {
+            endpoint: _,
+            thread: t,
+            key_updater: _,
+        } = spawn_server(
+            "solQuicTest",
+            "quic_streamer_test",
             s,
             &keypair,
-            ip,
             sender,
             exit.clone(),
             1,
             staked_nodes,
             MAX_STAKED_CONNECTIONS,
             MAX_UNSTAKED_CONNECTIONS,
-            stats,
-            100,
+            DEFAULT_WAIT_FOR_CHUNK_TIMEOUT,
+            DEFAULT_TPU_COALESCE,
         )
         .unwrap();
         (t, exit, receiver, server_address)
@@ -391,7 +534,7 @@ mod test {
     fn test_quic_timeout() {
         solana_logger::setup();
         let (t, exit, receiver, server_address) = setup_quic_server();
-        let runtime = rt();
+        let runtime = rt("solQuicTestRt".to_string());
         runtime.block_on(check_timeout(receiver, server_address));
         exit.store(true, Ordering::Relaxed);
         t.join().unwrap();
@@ -402,7 +545,7 @@ mod test {
         solana_logger::setup();
         let (t, exit, _receiver, server_address) = setup_quic_server();
 
-        let runtime = rt();
+        let runtime = rt("solQuicTestRt".to_string());
         runtime.block_on(check_block_multiple_connections(server_address));
         exit.store(true, Ordering::Relaxed);
         t.join().unwrap();
@@ -415,26 +558,29 @@ mod test {
         let exit = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = unbounded();
         let keypair = Keypair::new();
-        let ip = "127.0.0.1".parse().unwrap();
         let server_address = s.local_addr().unwrap();
         let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
-        let stats = Arc::new(StreamStats::default());
-        let (_, t) = spawn_server(
+        let SpawnServerResult {
+            endpoint: _,
+            thread: t,
+            key_updater: _,
+        } = spawn_server(
+            "solQuicTest",
+            "quic_streamer_test",
             s,
             &keypair,
-            ip,
             sender,
             exit.clone(),
             2,
             staked_nodes,
             MAX_STAKED_CONNECTIONS,
             MAX_UNSTAKED_CONNECTIONS,
-            stats,
-            100,
+            DEFAULT_WAIT_FOR_CHUNK_TIMEOUT,
+            DEFAULT_TPU_COALESCE,
         )
         .unwrap();
 
-        let runtime = rt();
+        let runtime = rt("solQuicTestRt".to_string());
         runtime.block_on(check_multiple_streams(receiver, server_address));
         exit.store(true, Ordering::Relaxed);
         t.join().unwrap();
@@ -445,7 +591,7 @@ mod test {
         solana_logger::setup();
         let (t, exit, receiver, server_address) = setup_quic_server();
 
-        let runtime = rt();
+        let runtime = rt("solQuicTestRt".to_string());
         runtime.block_on(check_multiple_writes(receiver, server_address, None));
         exit.store(true, Ordering::Relaxed);
         t.join().unwrap();
@@ -458,26 +604,29 @@ mod test {
         let exit = Arc::new(AtomicBool::new(false));
         let (sender, _) = unbounded();
         let keypair = Keypair::new();
-        let ip = "127.0.0.1".parse().unwrap();
         let server_address = s.local_addr().unwrap();
         let staked_nodes = Arc::new(RwLock::new(StakedNodes::default()));
-        let stats = Arc::new(StreamStats::default());
-        let (_, t) = spawn_server(
+        let SpawnServerResult {
+            endpoint: _,
+            thread: t,
+            key_updater: _,
+        } = spawn_server(
+            "solQuicTest",
+            "quic_streamer_test",
             s,
             &keypair,
-            ip,
             sender,
             exit.clone(),
             1,
             staked_nodes,
             MAX_STAKED_CONNECTIONS,
             0, // Do not allow any connection from unstaked clients/nodes
-            stats,
-            100,
+            DEFAULT_WAIT_FOR_CHUNK_TIMEOUT,
+            DEFAULT_TPU_COALESCE,
         )
         .unwrap();
 
-        let runtime = rt();
+        let runtime = rt("solQuicTestRt".to_string());
         runtime.block_on(check_unstaked_node_connect_failure(server_address));
         exit.store(true, Ordering::Relaxed);
         t.join().unwrap();

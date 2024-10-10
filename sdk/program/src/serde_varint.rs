@@ -1,6 +1,6 @@
 //! Integers that serialize to variable size.
 
-#![allow(clippy::integer_arithmetic)]
+#![allow(clippy::arithmetic_side_effects)]
 use {
     serde::{
         de::{Error as _, SeqAccess, Visitor},
@@ -58,7 +58,7 @@ where
     deserializer.deserialize_tuple(
         (std::mem::size_of::<T>() * 8 + 6) / 7,
         VarIntVisitor {
-            phantom: PhantomData::default(),
+            phantom: PhantomData,
         },
     )
 }
@@ -73,9 +73,8 @@ macro_rules! impl_var_int {
                 let mut out = 0;
                 let mut shift = 0u32;
                 while shift < <$type>::BITS {
-                    let byte = match seq.next_element::<u8>()? {
-                        None => return Err(A::Error::custom("Invalid Sequence")),
-                        Some(byte) => byte,
+                    let Some(byte) = seq.next_element::<u8>()? else {
+                        return Err(A::Error::custom("Invalid Sequence"));
                     };
                     out |= ((byte & 0x7F) as Self) << shift;
                     if byte & 0x80 == 0 {
@@ -115,12 +114,13 @@ macro_rules! impl_var_int {
     };
 }
 
+impl_var_int!(u16);
 impl_var_int!(u32);
 impl_var_int!(u64);
 
 #[cfg(test)]
 mod tests {
-    use rand::Rng;
+    use {crate::short_vec::ShortU16, rand::Rng};
 
     #[derive(Debug, Eq, PartialEq, Serialize, Deserialize)]
     struct Dummy {
@@ -181,10 +181,10 @@ mod tests {
         let mut rng = rand::thread_rng();
         for _ in 0..100_000 {
             let dummy = Dummy {
-                a: rng.gen::<u32>() >> rng.gen_range(0, u32::BITS),
-                b: rng.gen::<u64>() >> rng.gen_range(0, u64::BITS),
-                c: rng.gen::<u64>() >> rng.gen_range(0, u64::BITS),
-                d: rng.gen::<u32>() >> rng.gen_range(0, u32::BITS),
+                a: rng.gen::<u32>() >> rng.gen_range(0..u32::BITS),
+                b: rng.gen::<u64>() >> rng.gen_range(0..u64::BITS),
+                c: rng.gen::<u64>() >> rng.gen_range(0..u64::BITS),
+                d: rng.gen::<u32>() >> rng.gen_range(0..u32::BITS),
             };
             let bytes = bincode::serialize(&dummy).unwrap();
             let other: Dummy = bincode::deserialize(&bytes).unwrap();
@@ -251,6 +251,37 @@ mod tests {
                 }
             }
         }
-        assert!(num_errors > 2_000);
+        assert!(
+            (3_000..23_000).contains(&num_errors),
+            "num errors: {num_errors}"
+        );
+    }
+
+    #[test]
+    fn test_serde_varint_cross_fuzz() {
+        #[derive(Serialize, Deserialize)]
+        struct U16(#[serde(with = "super")] u16);
+        let mut rng = rand::thread_rng();
+        let mut buffer = [0u8; 16];
+        let mut num_errors = 0;
+        for _ in 0..200_000 {
+            rng.fill(&mut buffer[..]);
+            match bincode::deserialize::<U16>(&buffer) {
+                Err(_) => {
+                    assert!(bincode::deserialize::<ShortU16>(&buffer).is_err());
+                    num_errors += 1;
+                }
+                Ok(k) => {
+                    let bytes = bincode::serialize(&k).unwrap();
+                    assert_eq!(bytes, &buffer[..bytes.len()]);
+                    assert_eq!(bytes, bincode::serialize(&ShortU16(k.0)).unwrap());
+                    assert_eq!(bincode::deserialize::<ShortU16>(&buffer).unwrap().0, k.0);
+                }
+            }
+        }
+        assert!(
+            (30_000..70_000).contains(&num_errors),
+            "num errors: {num_errors}"
+        );
     }
 }

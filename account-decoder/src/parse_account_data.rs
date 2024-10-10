@@ -1,25 +1,22 @@
 use {
     crate::{
         parse_address_lookup_table::parse_address_lookup_table,
-        parse_bpf_loader::parse_bpf_upgradeable_loader,
-        parse_config::parse_config,
-        parse_nonce::parse_nonce,
-        parse_stake::parse_stake,
-        parse_sysvar::parse_sysvar,
-        parse_token::{parse_token, spl_token_2022_id, spl_token_id},
-        parse_vote::parse_vote,
+        parse_bpf_loader::parse_bpf_upgradeable_loader, parse_config::parse_config,
+        parse_nonce::parse_nonce, parse_stake::parse_stake, parse_sysvar::parse_sysvar,
+        parse_token::parse_token, parse_vote::parse_vote,
     },
     inflector::Inflector,
     serde_json::Value,
     solana_sdk::{
-        instruction::InstructionError, pubkey::Pubkey, stake, system_program, sysvar, vote,
+        address_lookup_table, instruction::InstructionError, pubkey::Pubkey, stake, system_program,
+        sysvar, vote,
     },
     std::collections::HashMap,
     thiserror::Error,
 };
 
 lazy_static! {
-    static ref ADDRESS_LOOKUP_PROGRAM_ID: Pubkey = solana_address_lookup_table_program::id();
+    static ref ADDRESS_LOOKUP_PROGRAM_ID: Pubkey = address_lookup_table::program::id();
     static ref BPF_UPGRADEABLE_LOADER_PROGRAM_ID: Pubkey = solana_sdk::bpf_loader_upgradeable::id();
     static ref CONFIG_PROGRAM_ID: Pubkey = solana_config_program::id();
     static ref STAKE_PROGRAM_ID: Pubkey = stake::program::id();
@@ -38,8 +35,8 @@ lazy_static! {
         );
         m.insert(*CONFIG_PROGRAM_ID, ParsableAccount::Config);
         m.insert(*SYSTEM_PROGRAM_ID, ParsableAccount::Nonce);
-        m.insert(spl_token_id(), ParsableAccount::SplToken);
-        m.insert(spl_token_2022_id(), ParsableAccount::SplToken2022);
+        m.insert(spl_token::id(), ParsableAccount::SplToken);
+        m.insert(spl_token_2022::id(), ParsableAccount::SplToken2022);
         m.insert(*STAKE_PROGRAM_ID, ParsableAccount::Stake);
         m.insert(*SYSVAR_PROGRAM_ID, ParsableAccount::Sysvar);
         m.insert(*VOTE_PROGRAM_ID, ParsableAccount::Vote);

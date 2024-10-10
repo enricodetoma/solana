@@ -20,6 +20,7 @@
 
 use {
     lazy_static::lazy_static,
+    solana_program::{epoch_schedule::EpochSchedule, stake_history::Epoch},
     solana_sdk::{
         clock::Slot,
         hash::{Hash, Hasher},
@@ -137,16 +138,16 @@ pub mod stake_merge_with_unmatched_credits_observed {
     solana_sdk::declare_id!("meRgp4ArRPhD3KtCY9c5yAf2med7mBLsjKTPeVUHqBL");
 }
 
-pub mod gate_large_block {
-    solana_sdk::declare_id!("2ry7ygxiYURULZCrypHhveanvP5tzZ4toRwVp89oCNSj");
-}
-
 pub mod zk_token_sdk_enabled {
     solana_sdk::declare_id!("zk1snxsc6Fh3wsGNbbHAJNHiJoYgF29mMnTSusGx5EJ");
 }
 
 pub mod curve25519_syscall_enabled {
     solana_sdk::declare_id!("7rcw5UtqgDTBBv2EcynNfYckgdAaH1MAsCjKgXMkN7Ri");
+}
+
+pub mod curve25519_restrict_msm_length {
+    solana_sdk::declare_id!("eca6zf6JJRjQsYYPkBHF3N32MTzur4n2WL4QiiacPCL");
 }
 
 pub mod versioned_tx_message_enabled {
@@ -261,10 +262,6 @@ pub mod allow_votes_to_directly_update_vote_state {
     solana_sdk::declare_id!("Ff8b1fBeB86q8cjq47ZhsQLgv5EkHu3G1C99zjUfAzrq");
 }
 
-pub mod cap_accounts_data_len {
-    solana_sdk::declare_id!("capRxUrBjNkkCpjrJxPGfPaWijB7q3JoDfsWXAnt46r");
-}
-
 pub mod max_tx_account_locks {
     solana_sdk::declare_id!("CBkDroRDqm8HwHe6ak9cguPjUomrASEkfmxEaZ5CNNxz");
 }
@@ -286,7 +283,7 @@ pub mod stake_deactivate_delinquent_instruction {
 }
 
 pub mod stake_redelegate_instruction {
-    solana_sdk::declare_id!("3EPmAX94PvVJCjMeFfRFvj4avqCPL8vv3TGsZQg7ydMx");
+    solana_sdk::declare_id!("2KKG3C6RBnxQo9jVVrbzsoSh41TDXLK7gBc9gduyxSzW");
 }
 
 pub mod vote_withdraw_authority_may_change_authorized_voter {
@@ -372,6 +369,9 @@ pub mod fix_recent_blockhashes {
 pub mod update_rewards_from_cached_accounts {
     solana_sdk::declare_id!("28s7i3htzhahXQKqmS2ExzbEoUypg9krwvtK2M9UWXh9");
 }
+pub mod enable_partitioned_epoch_reward {
+    solana_sdk::declare_id!("41tVp5qR1XwWRt5WifvtSQyuxtqQWJgEK8w91AtBqSwP");
+}
 
 pub mod spl_token_v3_4_0 {
     solana_sdk::declare_id!("Ftok4njE8b7tDffYkC5bAbCaQv5sL6jispYrprzatUwN");
@@ -394,8 +394,12 @@ pub mod require_static_program_ids_in_transaction {
 }
 
 pub mod stake_raise_minimum_delegation_to_1_sol {
-    // This is a feature-proposal *feature id*.  The feature keypair address is `3YHAo6wWw5rDbQxb59BmJkQ3XwVhX3m8tdBVbtxnJmma`.
-    solana_sdk::declare_id!("4xmyBuR2VCXzy9H6qYpH9ckfgnTuMDQFPFBfTs4eBCY1");
+    // This is a feature-proposal *feature id*.  The feature keypair address is `GQXzC7YiSNkje6FFUk6sc2p53XRvKoaZ9VMktYzUMnpL`.
+    solana_sdk::declare_id!("9onWzzvCzNC2jfhxxeqRgs5q7nFAAKpCUvkj6T6GJK9i");
+}
+
+pub mod stake_minimum_delegation_for_rewards {
+    solana_sdk::declare_id!("G6ANXD6ptCSyNd9znZm7j4dEczAJCfx7Cy43oBx3rKHJ");
 }
 
 pub mod add_set_compute_unit_price_ix {
@@ -446,10 +450,6 @@ pub mod vote_authorize_with_seed {
     solana_sdk::declare_id!("6tRxEYKuy2L5nnv5bgn7iT28MxUbYxp5h7F3Ncf1exrT");
 }
 
-pub mod cap_accounts_data_size_per_block {
-    solana_sdk::declare_id!("qywiJyZmqTKspFg2LeuUHqcA5nNvBgobqb9UprywS9N");
-}
-
 pub mod preserve_rent_epoch_for_rent_exempt_accounts {
     solana_sdk::declare_id!("HH3MUYReL2BvqqA3oEcAa7txju5GY6G4nxJ51zvsEjEZ");
 }
@@ -460,6 +460,10 @@ pub mod enable_bpf_loader_extend_program_ix {
 
 pub mod enable_early_verification_of_account_modifications {
     solana_sdk::declare_id!("7Vced912WrRnfjaiKRiNBcbuFw7RrnLv3E3z95Y4GTNc");
+}
+
+pub mod skip_rent_rewrites {
+    solana_sdk::declare_id!("CGB2jM8pwZkeeiXQ66kBMyBR6Np61mggL7XUsmLjVcrw");
 }
 
 pub mod prevent_crediting_accounts_that_end_rent_paying {
@@ -546,12 +550,11 @@ pub mod enable_bpf_loader_set_authority_checked_ix {
     solana_sdk::declare_id!("5x3825XS7M2A3Ekbn5VGGkvFoAg5qrRWkTrY4bARP1GL");
 }
 
-pub mod cap_transaction_accounts_data_size {
-    solana_sdk::declare_id!("DdLwVYuvDz26JohmgSbA7mjpJFgX5zP2dkp8qsF2C33V");
-}
-
 pub mod enable_alt_bn128_syscall {
     solana_sdk::declare_id!("A16q37opZdQMCbe5qJ6xpBB9usykfv8jZaMkxvZQi4GJ");
+}
+pub mod enable_alt_bn128_compression_syscall {
+    solana_sdk::declare_id!("EJJewYSddEEtSZHiqugnvhQHiWyZKjkFDQASd7oKSagn");
 }
 
 pub mod enable_program_redeployment_cooldown {
@@ -568,6 +571,213 @@ pub mod enable_turbine_fanout_experiments {
 
 pub mod disable_turbine_fanout_experiments {
     solana_sdk::declare_id!("Gz1aLrbeQ4Q6PTSafCZcGWZXz91yVRi7ASFzFEr1U4sa");
+}
+
+pub mod move_serialized_len_ptr_in_cpi {
+    solana_sdk::declare_id!("74CoWuBmt3rUVUrCb2JiSTvh6nXyBWUsK4SaMj3CtE3T");
+}
+
+pub mod update_hashes_per_tick {
+    solana_sdk::declare_id!("3uFHb9oKdGfgZGJK9EHaAXN4USvnQtAFC13Fh5gGFS5B");
+}
+
+pub mod enable_big_mod_exp_syscall {
+    solana_sdk::declare_id!("EBq48m8irRKuE7ZnMTLvLg2UuGSqhe8s8oMqnmja1fJw");
+}
+
+pub mod disable_builtin_loader_ownership_chains {
+    solana_sdk::declare_id!("4UDcAfQ6EcA6bdcadkeHpkarkhZGJ7Bpq7wTAiRMjkoi");
+}
+
+pub mod cap_transaction_accounts_data_size {
+    solana_sdk::declare_id!("DdLwVYuvDz26JohmgSbA7mjpJFgX5zP2dkp8qsF2C33V");
+}
+
+pub mod remove_congestion_multiplier_from_fee_calculation {
+    solana_sdk::declare_id!("A8xyMHZovGXFkorFqEmVH2PKGLiBip5JD7jt4zsUWo4H");
+}
+
+pub mod enable_request_heap_frame_ix {
+    solana_sdk::declare_id!("Hr1nUA9b7NJ6eChS26o7Vi8gYYDDwWD3YeBfzJkTbU86");
+}
+
+pub mod prevent_rent_paying_rent_recipients {
+    solana_sdk::declare_id!("Fab5oP3DmsLYCiQZXdjyqT3ukFFPrsmqhXU4WU1AWVVF");
+}
+
+pub mod delay_visibility_of_program_deployment {
+    solana_sdk::declare_id!("GmuBvtFb2aHfSfMXpuFeWZGHyDeCLPS79s48fmCWCfM5");
+}
+
+pub mod apply_cost_tracker_during_replay {
+    solana_sdk::declare_id!("2ry7ygxiYURULZCrypHhveanvP5tzZ4toRwVp89oCNSj");
+}
+pub mod bpf_account_data_direct_mapping {
+    solana_sdk::declare_id!("EenyoWx9UMXYKpR8mW5Jmfmy2fRjzUtM7NduYMY8bx33");
+}
+
+pub mod add_set_tx_loaded_accounts_data_size_instruction {
+    solana_sdk::declare_id!("G6vbf1UBok8MWb8m25ex86aoQHeKTzDKzuZADHkShqm6");
+}
+
+pub mod switch_to_new_elf_parser {
+    solana_sdk::declare_id!("Cdkc8PPTeTNUPoZEfCY5AyetUrEdkZtNPMgz58nqyaHD");
+}
+
+pub mod round_up_heap_size {
+    solana_sdk::declare_id!("CE2et8pqgyQMP2mQRg3CgvX8nJBKUArMu3wfiQiQKY1y");
+}
+
+pub mod remove_bpf_loader_incorrect_program_id {
+    solana_sdk::declare_id!("2HmTkCj9tXuPE4ueHzdD7jPeMf9JGCoZh5AsyoATiWEe");
+}
+
+pub mod include_loaded_accounts_data_size_in_fee_calculation {
+    solana_sdk::declare_id!("EaQpmC6GtRssaZ3PCUM5YksGqUdMLeZ46BQXYtHYakDS");
+}
+
+pub mod native_programs_consume_cu {
+    solana_sdk::declare_id!("8pgXCMNXC8qyEFypuwpXyRxLXZdpM4Qo72gJ6k87A6wL");
+}
+
+pub mod simplify_writable_program_account_check {
+    solana_sdk::declare_id!("5ZCcFAzJ1zsFKe1KSZa9K92jhx7gkcKj97ci2DBo1vwj");
+}
+
+pub mod stop_truncating_strings_in_syscalls {
+    solana_sdk::declare_id!("16FMCmgLzCNNz6eTwGanbyN2ZxvTBSLuQ6DZhgeMshg");
+}
+
+pub mod clean_up_delegation_errors {
+    solana_sdk::declare_id!("Bj2jmUsM2iRhfdLLDSTkhM5UQRQvQHm57HSmPibPtEyu");
+}
+
+pub mod vote_state_add_vote_latency {
+    solana_sdk::declare_id!("7axKe5BTYBDD87ftzWbk5DfzWMGyRvqmWTduuo22Yaqy");
+}
+
+pub mod checked_arithmetic_in_fee_validation {
+    solana_sdk::declare_id!("5Pecy6ie6XGm22pc9d4P9W5c31BugcFBuy6hsP2zkETv");
+}
+
+pub mod last_restart_slot_sysvar {
+    solana_sdk::declare_id!("HooKD5NC9QNxk25QuzCssB8ecrEzGt6eXEPBUxWp1LaR");
+}
+
+pub mod reduce_stake_warmup_cooldown {
+    solana_sdk::declare_id!("GwtDQBghCTBgmX2cpEGNPxTEBUTQRaDMGTr5qychdGMj");
+}
+
+mod revise_turbine_epoch_stakes {
+    solana_sdk::declare_id!("BTWmtJC8U5ZLMbBUUA1k6As62sYjPEjAiNAT55xYGdJU");
+}
+
+pub mod enable_poseidon_syscall {
+    solana_sdk::declare_id!("FL9RsQA6TVUoh5xJQ9d936RHSebA1NLQqe3Zv9sXZRpr");
+}
+
+pub mod timely_vote_credits {
+    solana_sdk::declare_id!("tvcF6b1TRz353zKuhBjinZkKzjmihXmBAHJdjNYw1sQ");
+}
+
+pub mod remaining_compute_units_syscall_enabled {
+    solana_sdk::declare_id!("5TuppMutoyzhUSfuYdhgzD47F92GL1g89KpCZQKqedxP");
+}
+
+pub mod enable_program_runtime_v2_and_loader_v4 {
+    solana_sdk::declare_id!("8oBxsYqnCvUTGzgEpxPcnVf7MLbWWPYddE33PftFeBBd");
+}
+
+pub mod require_rent_exempt_split_destination {
+    solana_sdk::declare_id!("D2aip4BBr8NPWtU9vLrwrBvbuaQ8w1zV38zFLxx4pfBV");
+}
+
+pub mod better_error_codes_for_tx_lamport_check {
+    solana_sdk::declare_id!("Ffswd3egL3tccB6Rv3XY6oqfdzn913vUcjCSnpvCKpfx");
+}
+
+pub mod update_hashes_per_tick2 {
+    solana_sdk::declare_id!("EWme9uFqfy1ikK1jhJs8fM5hxWnK336QJpbscNtizkTU");
+}
+
+pub mod update_hashes_per_tick3 {
+    solana_sdk::declare_id!("8C8MCtsab5SsfammbzvYz65HHauuUYdbY2DZ4sznH6h5");
+}
+
+pub mod update_hashes_per_tick4 {
+    solana_sdk::declare_id!("8We4E7DPwF2WfAN8tRTtWQNhi98B99Qpuj7JoZ3Aikgg");
+}
+
+pub mod update_hashes_per_tick5 {
+    solana_sdk::declare_id!("BsKLKAn1WM4HVhPRDsjosmqSg2J8Tq5xP2s2daDS6Ni4");
+}
+
+pub mod update_hashes_per_tick6 {
+    solana_sdk::declare_id!("FKu1qYwLQSiehz644H6Si65U5ZQ2cp9GxsyFUfYcuADv");
+}
+
+pub mod validate_fee_collector_account {
+    solana_sdk::declare_id!("prpFrMtgNmzaNzkPJg9o753fVvbHKqNrNTm76foJ2wm");
+}
+
+pub mod disable_rent_fees_collection {
+    solana_sdk::declare_id!("CJzY83ggJHqPGDq8VisV3U91jDJLuEaALZooBrXtnnLU");
+}
+
+pub mod enable_zk_transfer_with_fee {
+    solana_sdk::declare_id!("zkNLP7EQALfC1TYeB3biDU7akDckj8iPkvh9y2Mt2K3");
+}
+
+pub mod drop_legacy_shreds {
+    solana_sdk::declare_id!("GV49KKQdBNaiv2pgqhS2Dy3GWYJGXMTVYbYkdk91orRy");
+}
+
+pub mod allow_commission_decrease_at_any_time {
+    solana_sdk::declare_id!("decoMktMcnmiq6t3u7g5BfgcQu91nKZr6RvMYf9z1Jb");
+}
+
+pub mod add_new_reserved_account_keys {
+    solana_sdk::declare_id!("8U4skmMVnF6k2kMvrWbQuRUT3qQSiTYpSjqmhmgfthZu");
+}
+
+pub mod consume_blockstore_duplicate_proofs {
+    solana_sdk::declare_id!("6YsBCejwK96GZCkJ6mkZ4b68oP63z2PLoQmWjC7ggTqZ");
+}
+
+pub mod index_erasure_conflict_duplicate_proofs {
+    solana_sdk::declare_id!("dupPajaLy2SSn8ko42aZz4mHANDNrLe8Nw8VQgFecLa");
+}
+
+pub mod merkle_conflict_duplicate_proofs {
+    solana_sdk::declare_id!("mrkPjRg79B2oK2ZLgd7S3AfEJaX9B6gAF3H9aEykRUS");
+}
+
+pub mod disable_bpf_loader_instructions {
+    solana_sdk::declare_id!("7WeS1vfPRgeeoXArLh7879YcB9mgE9ktjPDtajXeWfXn");
+}
+
+pub mod enable_zk_proof_from_account {
+    solana_sdk::declare_id!("zkiTNuzBKxrCLMKehzuQeKZyLtX2yvFcEKMML8nExU8");
+}
+
+pub mod cost_model_requested_write_lock_cost {
+    solana_sdk::declare_id!("wLckV1a64ngtcKPRGU4S4grVTestXjmNjxBjaKZrAcn");
+}
+
+pub mod enable_gossip_duplicate_proof_ingestion {
+    solana_sdk::declare_id!("FNKCMBzYUdjhHyPdsKG2LSmdzH8TCHXn3ytj8RNBS4nG");
+}
+
+pub mod enable_chained_merkle_shreds {
+    solana_sdk::declare_id!("7uZBkJXJ1HkuP6R3MJfZs7mLwymBcDbKdqbF51ZWLier");
+}
+
+pub mod remove_rounding_in_fee_calculation {
+    solana_sdk::declare_id!("BtVN7YjDzNE6Dk7kTT7YTDgMNUZTNgiSJgsdzAeTg2jF");
+}
+
+pub mod deprecate_unused_legacy_vote_plumbing {
+    solana_sdk::declare_id!("6Uf8S75PVh91MYgPQSHnjRAPQq6an5BDv9vomrCwDqLe");
 }
 
 lazy_static! {
@@ -599,12 +809,11 @@ lazy_static! {
         (merge_nonce_error_into_system_error::id(), "merge NonceError into SystemError"),
         (disable_fees_sysvar::id(), "disable fees sysvar"),
         (stake_merge_with_unmatched_credits_observed::id(), "allow merging active stakes with unmatched credits_observed #18985"),
-        (gate_large_block::id(), "validator checks block cost against max limit in realtime, reject if exceeds."),
         (zk_token_sdk_enabled::id(), "enable Zk Token proof program and syscalls"),
         (curve25519_syscall_enabled::id(), "enable curve25519 syscalls"),
         (versioned_tx_message_enabled::id(), "enable versioned transaction message processing"),
-        (libsecp256k1_fail_on_bad_count::id(), "fail libsec256k1_verify if count appears wrong"),
-        (libsecp256k1_fail_on_bad_count2::id(), "fail libsec256k1_verify if count appears wrong"),
+        (libsecp256k1_fail_on_bad_count::id(), "fail libsecp256k1_verify if count appears wrong"),
+        (libsecp256k1_fail_on_bad_count2::id(), "fail libsecp256k1_verify if count appears wrong"),
         (instructions_sysvar_owned_by_sysvar::id(), "fix owner for instructions sysvar"),
         (stake_program_advance_activating_credits_observed::id(), "Enable advancing credits observed for activation epoch #19309"),
         (credits_auto_rewind::id(), "Auto rewind stake's credits_observed if (accidental) vote recreation is detected #22546"),
@@ -630,7 +839,6 @@ lazy_static! {
         (reject_non_rent_exempt_vote_withdraws::id(), "fail vote withdraw instructions which leave the account non-rent-exempt"),
         (evict_invalid_stakes_cache_entries::id(), "evict invalid stakes cache entries on epoch boundaries"),
         (allow_votes_to_directly_update_vote_state::id(), "enable direct vote state update"),
-        (cap_accounts_data_len::id(), "cap the accounts data len"),
         (max_tx_account_locks::id(), "enforce max number of locked accounts per transaction"),
         (require_rent_exempt_accounts::id(), "require all new transaction accounts with data to be rent-exempt"),
         (filter_votes_outside_slot_hashes::id(), "filter vote slots older than the slot hashes history"),
@@ -657,12 +865,14 @@ lazy_static! {
         (executables_incur_cpi_data_cost::id(), "Executables incur CPI data costs"),
         (fix_recent_blockhashes::id(), "stop adding hashes for skipped slots to recent blockhashes"),
         (update_rewards_from_cached_accounts::id(), "update rewards from cached accounts"),
+        (enable_partitioned_epoch_reward::id(), "enable partitioned rewards at epoch boundary #32166"),
         (spl_token_v3_4_0::id(), "SPL Token Program version 3.4.0 release #24740"),
         (spl_associated_token_account_v1_1_0::id(), "SPL Associated Token Account Program version 1.1.0 release #24741"),
         (default_units_per_instruction::id(), "Default max tx-wide compute units calculated per instruction"),
         (stake_allow_zero_undelegated_amount::id(), "Allow zero-lamport undelegated amount for initialized stakes #24670"),
         (require_static_program_ids_in_transaction::id(), "require static program ids in versioned transactions"),
         (stake_raise_minimum_delegation_to_1_sol::id(), "Raise minimum stake delegation to 1.0 SOL #24357"),
+        (stake_minimum_delegation_for_rewards::id(), "stakes must be at least the minimum delegation to earn rewards"),
         (add_set_compute_unit_price_ix::id(), "add compute budget ix for setting a compute unit price"),
         (disable_deploy_of_alloc_free_syscall::id(), "disable new deployments of deprecated sol_alloc_free_ syscall"),
         (include_account_index_in_rent_error::id(), "include account index in rent tx error #25190"),
@@ -675,10 +885,10 @@ lazy_static! {
         (nonce_must_be_authorized::id(), "nonce must be authorized"),
         (nonce_must_be_advanceable::id(), "durable nonces must be advanceable"),
         (vote_authorize_with_seed::id(), "An instruction you can use to change a vote accounts authority when the current authority is a derived key #25860"),
-        (cap_accounts_data_size_per_block::id(), "cap the accounts data size per block #25517"),
         (stake_redelegate_instruction::id(), "enable the redelegate stake instruction #26294"),
         (preserve_rent_epoch_for_rent_exempt_accounts::id(), "preserve rent epoch for rent exempt accounts #26479"),
         (enable_bpf_loader_extend_program_ix::id(), "enable bpf upgradeable loader ExtendProgram instruction #25234"),
+        (skip_rent_rewrites::id(), "skip rewriting rent exempt accounts during rent collection #26491"),
         (enable_early_verification_of_account_modifications::id(), "enable early verification of account modifications #25899"),
         (disable_rehash_for_rent_epoch::id(), "on accounts hash calculation, do not try to rehash accounts #28934"),
         (account_hash_ignore_slot::id(), "ignore slot when calculating an account hash #28420"),
@@ -701,12 +911,65 @@ lazy_static! {
         (limit_max_instruction_trace_length::id(), "limit max instruction trace length #27939"),
         (check_syscall_outputs_do_not_overlap::id(), "check syscall outputs do_not overlap #28600"),
         (enable_bpf_loader_set_authority_checked_ix::id(), "enable bpf upgradeable loader SetAuthorityChecked instruction #28424"),
-        (cap_transaction_accounts_data_size::id(), "cap transaction accounts data size up to its compute unit limits #27839"),
         (enable_alt_bn128_syscall::id(), "add alt_bn128 syscalls #27961"),
         (enable_program_redeployment_cooldown::id(), "enable program redeployment cooldown #29135"),
         (commission_updates_only_allowed_in_first_half_of_epoch::id(), "validator commission updates are only allowed in the first half of an epoch #29362"),
         (enable_turbine_fanout_experiments::id(), "enable turbine fanout experiments #29393"),
         (disable_turbine_fanout_experiments::id(), "disable turbine fanout experiments #29393"),
+        (move_serialized_len_ptr_in_cpi::id(), "cpi ignore serialized_len_ptr #29592"),
+        (update_hashes_per_tick::id(), "Update desired hashes per tick on epoch boundary"),
+        (enable_big_mod_exp_syscall::id(), "add big_mod_exp syscall #28503"),
+        (disable_builtin_loader_ownership_chains::id(), "disable builtin loader ownership chains #29956"),
+        (cap_transaction_accounts_data_size::id(), "cap transaction accounts data size up to a limit #27839"),
+        (remove_congestion_multiplier_from_fee_calculation::id(), "Remove congestion multiplier from transaction fee calculation #29881"),
+        (enable_request_heap_frame_ix::id(), "Enable transaction to request heap frame using compute budget instruction #30076"),
+        (prevent_rent_paying_rent_recipients::id(), "prevent recipients of rent rewards from ending in rent-paying state #30151"),
+        (delay_visibility_of_program_deployment::id(), "delay visibility of program upgrades #30085"),
+        (apply_cost_tracker_during_replay::id(), "apply cost tracker to blocks during replay #29595"),
+        (add_set_tx_loaded_accounts_data_size_instruction::id(), "add compute budget instruction for setting account data size per transaction #30366"),
+        (switch_to_new_elf_parser::id(), "switch to new ELF parser #30497"),
+        (round_up_heap_size::id(), "round up heap size when calculating heap cost #30679"),
+        (remove_bpf_loader_incorrect_program_id::id(), "stop incorrectly throwing IncorrectProgramId in bpf_loader #30747"),
+        (include_loaded_accounts_data_size_in_fee_calculation::id(), "include transaction loaded accounts data size in base fee calculation #30657"),
+        (native_programs_consume_cu::id(), "Native program should consume compute units #30620"),
+        (simplify_writable_program_account_check::id(), "Simplify checks performed for writable upgradeable program accounts #30559"),
+        (stop_truncating_strings_in_syscalls::id(), "Stop truncating strings in syscalls #31029"),
+        (clean_up_delegation_errors::id(), "Return InsufficientDelegation instead of InsufficientFunds or InsufficientStake where applicable #31206"),
+        (vote_state_add_vote_latency::id(), "replace Lockout with LandedVote (including vote latency) in vote state #31264"),
+        (checked_arithmetic_in_fee_validation::id(), "checked arithmetic in fee validation #31273"),
+        (bpf_account_data_direct_mapping::id(), "use memory regions to map account data into the rbpf vm instead of copying the data"),
+        (last_restart_slot_sysvar::id(), "enable new sysvar last_restart_slot"),
+        (reduce_stake_warmup_cooldown::id(), "reduce stake warmup cooldown from 25% to 9%"),
+        (revise_turbine_epoch_stakes::id(), "revise turbine epoch stakes"),
+        (enable_poseidon_syscall::id(), "Enable Poseidon syscall"),
+        (timely_vote_credits::id(), "use timeliness of votes in determining credits to award"),
+        (remaining_compute_units_syscall_enabled::id(), "enable the remaining_compute_units syscall"),
+        (enable_program_runtime_v2_and_loader_v4::id(), "Enable Program-Runtime-v2 and Loader-v4 #33293"),
+        (require_rent_exempt_split_destination::id(), "Require stake split destination account to be rent exempt"),
+        (better_error_codes_for_tx_lamport_check::id(), "better error codes for tx lamport check #33353"),
+        (enable_alt_bn128_compression_syscall::id(), "add alt_bn128 compression syscalls"),
+        (update_hashes_per_tick2::id(), "Update desired hashes per tick to 2.8M"),
+        (update_hashes_per_tick3::id(), "Update desired hashes per tick to 4.4M"),
+        (update_hashes_per_tick4::id(), "Update desired hashes per tick to 7.6M"),
+        (update_hashes_per_tick5::id(), "Update desired hashes per tick to 9.2M"),
+        (update_hashes_per_tick6::id(), "Update desired hashes per tick to 10M"),
+        (validate_fee_collector_account::id(), "validate fee collector account #33888"),
+        (disable_rent_fees_collection::id(), "Disable rent fees collection #33945"),
+        (enable_zk_transfer_with_fee::id(), "enable Zk Token proof program transfer with fee"),
+        (drop_legacy_shreds::id(), "drops legacy shreds #34328"),
+        (allow_commission_decrease_at_any_time::id(), "Allow commission decrease at any time in epoch #33843"),
+        (consume_blockstore_duplicate_proofs::id(), "consume duplicate proofs from blockstore in consensus #34372"),
+        (add_new_reserved_account_keys::id(), "add new unwritable reserved accounts #34899"),
+        (index_erasure_conflict_duplicate_proofs::id(), "generate duplicate proofs for index and erasure conflicts #34360"),
+        (merkle_conflict_duplicate_proofs::id(), "generate duplicate proofs for merkle root conflicts #34270"),
+        (disable_bpf_loader_instructions::id(), "disable bpf loader management instructions #34194"),
+        (enable_zk_proof_from_account::id(), "Enable zk token proof program to read proof from accounts instead of instruction data #34750"),
+        (curve25519_restrict_msm_length::id(), "restrict curve25519 multiscalar multiplication vector lengths #34763"),
+        (cost_model_requested_write_lock_cost::id(), "cost model uses number of requested write locks #34819"),
+        (enable_gossip_duplicate_proof_ingestion::id(), "enable gossip duplicate proof ingestion #32963"),
+        (enable_chained_merkle_shreds::id(), "Enable chained Merkle shreds #34916"),
+        (remove_rounding_in_fee_calculation::id(), "Removing unwanted rounding in fee calculation #34982"),
+        (deprecate_unused_legacy_vote_plumbing::id(), "Deprecate unused legacy vote tx plumbing"),
         /*************** ADD NEW FEATURES HERE ***************/
     ]
     .iter()
@@ -805,6 +1068,11 @@ impl FeatureSet {
     pub fn deactivate(&mut self, feature_id: &Pubkey) {
         self.active.remove(feature_id);
         self.inactive.insert(*feature_id);
+    }
+
+    pub fn new_warmup_cooldown_rate_epoch(&self, epoch_schedule: &EpochSchedule) -> Option<Epoch> {
+        self.activated_slot(&reduce_stake_warmup_cooldown::id())
+            .map(|slot| epoch_schedule.get_epoch(slot))
     }
 }
 

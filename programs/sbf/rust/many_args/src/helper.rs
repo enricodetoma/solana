@@ -1,5 +1,7 @@
 //! Example Rust-based SBF program tests loop iteration
 
+#![allow(clippy::arithmetic_side_effects)]
+
 extern crate solana_program;
 use solana_program::log::*;
 

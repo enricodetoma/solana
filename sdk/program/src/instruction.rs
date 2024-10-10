@@ -11,7 +11,7 @@
 //! [`AccountMeta`] values. The runtime uses this information to efficiently
 //! schedule execution of transactions.
 
-#![allow(clippy::integer_arithmetic)]
+#![allow(clippy::arithmetic_side_effects)]
 
 use {
     crate::{pubkey::Pubkey, sanitize::Sanitize, short_vec, wasm_bindgen},
@@ -23,16 +23,13 @@ use {
 
 /// Reasons the runtime might have rejected an instruction.
 ///
-/// Instructions errors are included in the bank hashes and therefore are
-/// included as part of the transaction results when determining consensus.
-/// Because of this, members of this enum must not be removed, but new ones can
-/// be added.  Also, it is crucial that meta-information if any that comes along
-/// with an error be consistent across software versions.  For example, it is
+/// Members of this enum must not be removed, but new ones can be added.
+/// Also, it is crucial that meta-information if any that comes along with
+/// an error be consistent across software versions.  For example, it is
 /// dangerous to include error strings from 3rd party crates because they could
 /// change at any time and changes to them are difficult to detect.
-#[derive(
-    Serialize, Deserialize, Debug, Error, PartialEq, Eq, Clone, AbiExample, AbiEnumVisitor,
-)]
+#[cfg_attr(not(target_os = "solana"), derive(AbiExample, AbiEnumVisitor))]
+#[derive(Serialize, Deserialize, Debug, Error, PartialEq, Eq, Clone)]
 pub enum InstructionError {
     /// Deprecated! Use CustomError instead!
     /// The program instruction returned an error
@@ -154,7 +151,7 @@ pub enum InstructionError {
     ExecutableDataModified,
 
     /// Executable account's lamports modified
-    #[error("instruction changed the balance of a executable account")]
+    #[error("instruction changed the balance of an executable account")]
     ExecutableLamportChange,
 
     /// Executable accounts must be rent exempt
@@ -260,6 +257,10 @@ pub enum InstructionError {
     /// Max instruction trace length exceeded
     #[error("Max instruction trace length exceeded")]
     MaxInstructionTraceLengthExceeded,
+
+    /// Builtin programs must consume compute units
+    #[error("Builtin programs must consume compute units")]
+    BuiltinProgramsMustConsumeComputeUnits,
     // Note: For any new error added here an equivalent ProgramError and its
     // conversions must also be added
 }
@@ -272,7 +273,7 @@ pub enum InstructionError {
 /// clients. Instructions are also used to describe [cross-program
 /// invocations][cpi].
 ///
-/// [cpi]: https://docs.solana.com/developing/programming-model/calling-between-programs
+/// [cpi]: https://solana.com/docs/core/cpi
 ///
 /// During execution, a program will receive a list of account data as one of
 /// its arguments, in the same order as specified during `Instruction`
@@ -345,7 +346,7 @@ impl Instruction {
     /// `program_id` is the address of the program that will execute the instruction.
     /// `accounts` contains a description of all accounts that may be accessed by the program.
     ///
-    /// Borsh serialization is often prefered over bincode as it has a stable
+    /// Borsh serialization is often preferred over bincode as it has a stable
     /// [specification] and an [implementation in JavaScript][jsb], neither of
     /// which are true of bincode.
     ///
@@ -362,6 +363,7 @@ impl Instruction {
     /// # use borsh::{BorshSerialize, BorshDeserialize};
     /// #
     /// #[derive(BorshSerialize, BorshDeserialize)]
+    /// # #[borsh(crate = "borsh")]
     /// pub struct MyInstruction {
     ///     pub lamports: u64,
     /// }
@@ -389,7 +391,7 @@ impl Instruction {
         data: &T,
         accounts: Vec<AccountMeta>,
     ) -> Self {
-        let data = data.try_to_vec().unwrap();
+        let data = borsh::to_vec(data).unwrap();
         Self {
             program_id,
             accounts,
@@ -464,10 +466,10 @@ impl Instruction {
     /// #     pubkey::Pubkey,
     /// #     instruction::{AccountMeta, Instruction},
     /// # };
-    /// # use borsh::{BorshSerialize, BorshDeserialize};
-    /// # use anyhow::Result;
+    /// # use borsh::{io::Error, BorshSerialize, BorshDeserialize};
     /// #
     /// #[derive(BorshSerialize, BorshDeserialize)]
+    /// # #[borsh(crate = "borsh")]
     /// pub struct MyInstruction {
     ///     pub lamports: u64,
     /// }
@@ -477,7 +479,7 @@ impl Instruction {
     ///     from: &Pubkey,
     ///     to: &Pubkey,
     ///     lamports: u64,
-    /// ) -> Result<Instruction> {
+    /// ) -> Result<Instruction, Error> {
     ///     let instr = MyInstruction { lamports };
     ///
     ///     let mut instr_in_bytes: Vec<u8> = Vec::new();
@@ -556,6 +558,7 @@ impl AccountMeta {
     /// # use borsh::{BorshSerialize, BorshDeserialize};
     /// #
     /// # #[derive(BorshSerialize, BorshDeserialize)]
+    /// # #[borsh(crate = "borsh")]
     /// # pub struct MyInstruction;
     /// #
     /// # let instruction = MyInstruction;
@@ -591,6 +594,7 @@ impl AccountMeta {
     /// # use borsh::{BorshSerialize, BorshDeserialize};
     /// #
     /// # #[derive(BorshSerialize, BorshDeserialize)]
+    /// # #[borsh(crate = "borsh")]
     /// # pub struct MyInstruction;
     /// #
     /// # let instruction = MyInstruction;
@@ -741,43 +745,4 @@ pub fn get_stack_height() -> usize {
     {
         crate::program_stubs::sol_get_stack_height() as usize
     }
-}
-
-#[test]
-fn test_account_meta_layout() {
-    #[derive(Debug, Default, PartialEq, Eq, Clone, Serialize, Deserialize)]
-    struct AccountMetaRust {
-        pub pubkey: Pubkey,
-        pub is_signer: bool,
-        pub is_writable: bool,
-    }
-
-    let account_meta_rust = AccountMetaRust::default();
-    let base_rust_addr = &account_meta_rust as *const _ as u64;
-    let pubkey_rust_addr = &account_meta_rust.pubkey as *const _ as u64;
-    let is_signer_rust_addr = &account_meta_rust.is_signer as *const _ as u64;
-    let is_writable_rust_addr = &account_meta_rust.is_writable as *const _ as u64;
-
-    let account_meta_c = AccountMeta::default();
-    let base_c_addr = &account_meta_c as *const _ as u64;
-    let pubkey_c_addr = &account_meta_c.pubkey as *const _ as u64;
-    let is_signer_c_addr = &account_meta_c.is_signer as *const _ as u64;
-    let is_writable_c_addr = &account_meta_c.is_writable as *const _ as u64;
-
-    assert_eq!(
-        std::mem::size_of::<AccountMetaRust>(),
-        std::mem::size_of::<AccountMeta>()
-    );
-    assert_eq!(
-        pubkey_rust_addr - base_rust_addr,
-        pubkey_c_addr - base_c_addr
-    );
-    assert_eq!(
-        is_signer_rust_addr - base_rust_addr,
-        is_signer_c_addr - base_c_addr
-    );
-    assert_eq!(
-        is_writable_rust_addr - base_rust_addr,
-        is_writable_c_addr - base_c_addr
-    );
 }

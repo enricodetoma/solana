@@ -1,7 +1,6 @@
 use {
     crate::parse_account_data::{ParsableAccount, ParseAccountError},
-    solana_address_lookup_table_program::state::AddressLookupTable,
-    solana_sdk::instruction::InstructionError,
+    solana_sdk::{address_lookup_table::state::AddressLookupTable, instruction::InstructionError},
 };
 
 pub fn parse_address_lookup_table(
@@ -62,8 +61,10 @@ impl<'a> From<AddressLookupTable<'a>> for UiLookupTable {
 mod test {
     use {
         super::*,
-        solana_address_lookup_table_program::state::{LookupTableMeta, LOOKUP_TABLE_META_SIZE},
-        solana_sdk::pubkey::Pubkey,
+        solana_sdk::{
+            address_lookup_table::state::{LookupTableMeta, LOOKUP_TABLE_META_SIZE},
+            pubkey::Pubkey,
+        },
         std::borrow::Cow,
     };
 
@@ -87,8 +88,7 @@ mod test {
             meta: lookup_table_meta,
             addresses: Cow::Owned(addresses),
         };
-        let lookup_table_data =
-            AddressLookupTable::serialize_for_tests(lookup_table.clone()).unwrap();
+        let lookup_table_data = AddressLookupTable::serialize_for_tests(lookup_table).unwrap();
 
         let parsing_result = parse_address_lookup_table(&lookup_table_data).unwrap();
         if let LookupTableAccountType::LookupTable(ui_lookup_table) = parsing_result {

@@ -4,7 +4,9 @@
  */
 
 #include <sol/assert.h>
+#include <sol/big_mod_exp.h>
 #include <sol/blake3.h>
+#include <sol/compute_units.h>
 #include <sol/cpi.h>
 #include <sol/deserialize.h>
 #include <sol/deserialize_deprecated.h>

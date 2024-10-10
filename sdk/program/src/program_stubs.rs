@@ -7,6 +7,7 @@ use {
         account_info::AccountInfo, entrypoint::ProgramResult, instruction::Instruction,
         program_error::UNSUPPORTED_SYSVAR, pubkey::Pubkey,
     },
+    base64::{prelude::BASE64_STANDARD, Engine},
     itertools::Itertools,
     std::sync::{Arc, RwLock},
 };
@@ -21,13 +22,17 @@ pub fn set_syscall_stubs(syscall_stubs: Box<dyn SyscallStubs>) -> Box<dyn Syscal
     std::mem::replace(&mut SYSCALL_STUBS.write().unwrap(), syscall_stubs)
 }
 
-#[allow(clippy::integer_arithmetic)]
+#[allow(clippy::arithmetic_side_effects)]
 pub trait SyscallStubs: Sync + Send {
     fn sol_log(&self, message: &str) {
         println!("{message}");
     }
     fn sol_log_compute_units(&self) {
         sol_log("SyscallStubs: sol_log_compute_units() not available");
+    }
+    fn sol_remaining_compute_units(&self) -> u64 {
+        sol_log("SyscallStubs: sol_remaining_compute_units() defaulting to 0");
+        0
     }
     fn sol_invoke_signed(
         &self,
@@ -48,6 +53,12 @@ pub trait SyscallStubs: Sync + Send {
         UNSUPPORTED_SYSVAR
     }
     fn sol_get_rent_sysvar(&self, _var_addr: *mut u8) -> u64 {
+        UNSUPPORTED_SYSVAR
+    }
+    fn sol_get_epoch_rewards_sysvar(&self, _var_addr: *mut u8) -> u64 {
+        UNSUPPORTED_SYSVAR
+    }
+    fn sol_get_last_restart_slot(&self, _var_addr: *mut u8) -> u64 {
         UNSUPPORTED_SYSVAR
     }
     /// # Safety
@@ -89,7 +100,10 @@ pub trait SyscallStubs: Sync + Send {
     }
     fn sol_set_return_data(&self, _data: &[u8]) {}
     fn sol_log_data(&self, fields: &[&[u8]]) {
-        println!("data: {}", fields.iter().map(base64::encode).join(" "));
+        println!(
+            "data: {}",
+            fields.iter().map(|v| BASE64_STANDARD.encode(v)).join(" ")
+        );
     }
     fn sol_get_processed_sibling_instruction(&self, _index: usize) -> Option<Instruction> {
         None
@@ -114,6 +128,10 @@ pub(crate) fn sol_log_64(arg1: u64, arg2: u64, arg3: u64, arg4: u64, arg5: u64) 
 
 pub(crate) fn sol_log_compute_units() {
     SYSCALL_STUBS.read().unwrap().sol_log_compute_units();
+}
+
+pub(crate) fn sol_remaining_compute_units() -> u64 {
+    SYSCALL_STUBS.read().unwrap().sol_remaining_compute_units()
 }
 
 pub(crate) fn sol_invoke_signed(
@@ -144,6 +162,13 @@ pub(crate) fn sol_get_fees_sysvar(var_addr: *mut u8) -> u64 {
 
 pub(crate) fn sol_get_rent_sysvar(var_addr: *mut u8) -> u64 {
     SYSCALL_STUBS.read().unwrap().sol_get_rent_sysvar(var_addr)
+}
+
+pub(crate) fn sol_get_last_restart_slot(var_addr: *mut u8) -> u64 {
+    SYSCALL_STUBS
+        .read()
+        .unwrap()
+        .sol_get_last_restart_slot(var_addr)
 }
 
 pub(crate) fn sol_memcpy(dst: *mut u8, src: *const u8, n: usize) {
@@ -193,21 +218,27 @@ pub(crate) fn sol_get_stack_height() -> u64 {
     SYSCALL_STUBS.read().unwrap().sol_get_stack_height()
 }
 
+pub(crate) fn sol_get_epoch_rewards_sysvar(var_addr: *mut u8) -> u64 {
+    SYSCALL_STUBS
+        .read()
+        .unwrap()
+        .sol_get_epoch_rewards_sysvar(var_addr)
+}
+
 /// Check that two regions do not overlap.
 ///
 /// Hidden to share with bpf_loader without being part of the API surface.
 #[doc(hidden)]
 pub fn is_nonoverlapping<N>(src: N, src_len: N, dst: N, dst_len: N) -> bool
 where
-    N: Ord + std::ops::Sub<Output = N>,
-    <N as std::ops::Sub>::Output: Ord,
+    N: Ord + num_traits::SaturatingSub,
 {
     // If the absolute distance between the ptrs is at least as big as the size of the other,
     // they do not overlap.
     if src > dst {
-        src - dst >= dst_len
+        src.saturating_sub(&dst) >= dst_len
     } else {
-        dst - src >= src_len
+        dst.saturating_sub(&src) >= src_len
     }
 }
 

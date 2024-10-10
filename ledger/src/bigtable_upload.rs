@@ -138,7 +138,7 @@ pub async fn upload_confirmed_blocks(
             "No blocks between {} and {} need to be uploaded to bigtable",
             starting_slot, ending_slot
         );
-        return Ok(last_blockstore_slot);
+        return Ok(ending_slot);
     }
     let last_slot = *blocks_to_upload.last().unwrap();
     info!(
@@ -162,13 +162,13 @@ pub async fn upload_confirmed_blocks(
 
         (
             (0..config.num_blocks_to_upload_in_parallel)
-                .map(|_| {
+                .map(|i| {
                     let blockstore = blockstore.clone();
                     let sender = sender.clone();
                     let slot_receiver = slot_receiver.clone();
                     let exit = exit.clone();
                     std::thread::Builder::new()
-                        .name("solBigTGetBlk".into())
+                        .name(format!("solBigTGetBlk{i:02}"))
                         .spawn(move || {
                             let start = Instant::now();
                             let mut num_blocks_read = 0;
@@ -178,10 +178,10 @@ pub async fn upload_confirmed_blocks(
                                     break;
                                 }
 
-                                let _ = match blockstore.get_rooted_block(slot, true) {
-                                    Ok(confirmed_block) => {
+                                let _ = match blockstore.get_rooted_block_with_entries(slot, true) {
+                                    Ok(confirmed_block_with_entries) => {
                                         num_blocks_read += 1;
-                                        sender.send((slot, Some(confirmed_block)))
+                                        sender.send((slot, Some(confirmed_block_with_entries)))
                                     }
                                     Err(err) => {
                                         warn!(
@@ -227,7 +227,8 @@ pub async fn upload_confirmed_blocks(
             Some(confirmed_block) => {
                 let bt = bigtable.clone();
                 Some(tokio::spawn(async move {
-                    bt.upload_confirmed_block(slot, confirmed_block).await
+                    bt.upload_confirmed_block_with_entries(slot, confirmed_block)
+                        .await
                 }))
             }
         });

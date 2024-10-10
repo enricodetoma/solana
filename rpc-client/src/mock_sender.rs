@@ -3,6 +3,7 @@
 use {
     crate::rpc_sender::*,
     async_trait::async_trait,
+    base64::{prelude::BASE64_STANDARD, Engine},
     serde_json::{json, Number, Value},
     solana_account_decoder::{UiAccount, UiAccountEncoding},
     solana_rpc_client_api::{
@@ -13,8 +14,8 @@ use {
             Response, RpcAccountBalance, RpcBlockProduction, RpcBlockProductionRange, RpcBlockhash,
             RpcConfirmedTransactionStatusWithSignature, RpcContactInfo, RpcFees, RpcIdentity,
             RpcInflationGovernor, RpcInflationRate, RpcInflationReward, RpcKeyedAccount,
-            RpcPerfSample, RpcResponseContext, RpcSimulateTransactionResult, RpcSnapshotSlotInfo,
-            RpcStakeActivation, RpcSupply, RpcVersionInfo, RpcVoteAccountInfo,
+            RpcPerfSample, RpcPrioritizationFee, RpcResponseContext, RpcSimulateTransactionResult,
+            RpcSnapshotSlotInfo, RpcStakeActivation, RpcSupply, RpcVersionInfo, RpcVoteAccountInfo,
             RpcVoteAccountStatus, StakeActivationState,
         },
     },
@@ -65,7 +66,7 @@ pub struct MockSender {
 ///    If `url` is "fails" then any call to `send` will return `Ok(Value::Null)`.
 ///
 ///    It is customary to set the `url` to "succeeds" for mocks that should
-///    return sucessfully, though this value is not actually interpreted.
+///    return successfully, though this value is not actually interpreted.
 ///
 ///    Other possible values of `url` are specific to different `RpcRequest`
 ///    values. Read the implementation for specifics.
@@ -240,7 +241,7 @@ impl RpcSender for MockSender {
             "getTransactionCount" => json![1234],
             "getSlot" => json![0],
             "getMaxShredInsertSlot" => json![0],
-            "requestAirdrop" => Value::String(Signature::new(&[8; 64]).to_string()),
+            "requestAirdrop" => Value::String(Signature::from([8; 64]).to_string()),
             "getSnapshotSlot" => Value::Number(Number::from(0)),
             "getHighestSnapshotSlot" => json!(RpcSnapshotSlotInfo {
                 full: 100,
@@ -332,10 +333,10 @@ impl RpcSender for MockSender {
             }
             "sendTransaction" => {
                 let signature = if self.url == "malicious" {
-                    Signature::new(&[8; 64]).to_string()
+                    Signature::from([8; 64]).to_string()
                 } else {
                     let tx_str = params.as_array().unwrap()[0].as_str().unwrap().to_string();
-                    let data = base64::decode(tx_str).unwrap();
+                    let data = BASE64_STANDARD.decode(tx_str).unwrap();
                     let tx: Transaction = bincode::deserialize(&data).unwrap();
                     tx.signatures[0].to_string()
                 };
@@ -349,6 +350,7 @@ impl RpcSender for MockSender {
                     accounts: None,
                     units_consumed: None,
                     return_data: None,
+                    inner_instructions: None,
                 },
             })?,
             "getMinimumBalanceForRentExemption" => json![20],
@@ -374,7 +376,9 @@ impl RpcSender for MockSender {
                 pubkey: PUBKEY.to_string(),
                 gossip: Some(SocketAddr::from(([10, 239, 6, 48], 8899))),
                 tpu: Some(SocketAddr::from(([10, 239, 6, 48], 8856))),
+                tpu_quic: Some(SocketAddr::from(([10, 239, 6, 48], 8862))),
                 rpc: Some(SocketAddr::from(([10, 239, 6, 48], 8899))),
+                pubsub: Some(SocketAddr::from(([10, 239, 6, 48], 8900))),
                 version: Some("1.0.0 c375ce1f".to_string()),
                 feature_set: None,
                 shred_version: None,
@@ -416,8 +420,13 @@ impl RpcSender for MockSender {
             "getRecentPerformanceSamples" => serde_json::to_value(vec![RpcPerfSample {
                 slot: 347873,
                 num_transactions: 125,
+                num_non_vote_transactions: Some(1),
                 num_slots: 123,
                 sample_period_secs: 60,
+            }])?,
+            "getRecentPrioritizationFees" => serde_json::to_value(vec![RpcPrioritizationFee {
+                slot: 123_456_789,
+                prioritization_fee: 10_000,
             }])?,
             "getIdentity" => serde_json::to_value(RpcIdentity {
                 identity: PUBKEY.to_string(),

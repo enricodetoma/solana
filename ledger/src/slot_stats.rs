@@ -19,7 +19,7 @@ pub(crate) enum ShredSource {
 }
 
 bitflags! {
-    #[derive(Default)]
+    #[derive(Copy, Clone, Default)]
     struct SlotFlags: u8 {
         const DEAD   = 0b00000001;
         const FULL   = 0b00000010;
@@ -99,7 +99,7 @@ impl SlotsStats {
     ) {
         let mut slot_full_reporting_info = None;
         let mut stats = self.stats.lock().unwrap();
-        let (mut slot_stats, evicted) = Self::get_or_default_with_eviction_check(&mut stats, slot);
+        let (slot_stats, evicted) = Self::get_or_default_with_eviction_check(&mut stats, slot);
         match source {
             ShredSource::Recovered => slot_stats.num_recovered += 1,
             ShredSource::Repaired => slot_stats.num_repaired += 1,
@@ -131,8 +131,8 @@ impl SlotsStats {
                 .unwrap_or(-1);
             datapoint_info!(
                 "shred_insert_is_full",
-                ("total_time_ms", total_time_ms, i64),
                 ("slot", slot, i64),
+                ("total_time_ms", total_time_ms, i64),
                 ("last_index", last_index, i64),
                 ("num_repaired", num_repaired, i64),
                 ("num_recovered", num_recovered, i64),

@@ -8,7 +8,6 @@ use {
     proc_macro::TokenStream,
     proc_macro2::{Delimiter, Span, TokenTree},
     quote::{quote, ToTokens},
-    std::convert::TryFrom,
     syn::{
         bracketed,
         parse::{Parse, ParseStream, Result},
@@ -44,16 +43,18 @@ fn id_to_tokens(
     tokens: &mut proc_macro2::TokenStream,
 ) {
     tokens.extend(quote! {
-        /// The static program ID.
-        pub static ID: #pubkey_type = #id;
+        /// The const program ID.
+        pub const ID: #pubkey_type = #id;
 
         /// Returns `true` if given pubkey is the program ID.
+        // TODO make this const once `derive_const` makes it out of nightly
+        // and we can `derive_const(PartialEq)` on `Pubkey`.
         pub fn check_id(id: &#pubkey_type) -> bool {
             id == &ID
         }
 
         /// Returns the program ID.
-        pub fn id() -> #pubkey_type {
+        pub const fn id() -> #pubkey_type {
             ID
         }
 
@@ -88,8 +89,8 @@ fn deprecated_id_to_tokens(
 
         #[cfg(test)]
         #[test]
-            fn test_id() {
-            #[allow(deprecated)]
+        #[allow(deprecated)]
+        fn test_id() {
             assert!(check_id(&id()));
         }
     });
@@ -390,7 +391,7 @@ pub fn wasm_bindgen_stub(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 for field in fields.named.iter_mut() {
                     field.attrs.retain(|attr| {
                         !attr
-                            .path
+                            .path()
                             .segments
                             .iter()
                             .any(|segment| segment.ident == "wasm_bindgen")
@@ -424,6 +425,10 @@ pub fn derive_clone_zeroed(input: proc_macro::TokenStream) -> proc_macro::TokenS
             let name = &item_struct.ident;
             quote! {
                 impl Clone for #name {
+                    // Clippy lint `incorrect_clone_impl_on_copy_type` requires that clone
+                    // implementations on `Copy` types are simply wrappers of `Copy`.
+                    // This is not the case here, and intentionally so because we want to
+                    // guarantee zeroed padding.
                     fn clone(&self) -> Self {
                         let mut value = std::mem::MaybeUninit::<Self>::uninit();
                         unsafe {

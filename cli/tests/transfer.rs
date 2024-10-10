@@ -1,4 +1,4 @@
-#![allow(clippy::integer_arithmetic)]
+#![allow(clippy::arithmetic_side_effects)]
 #![allow(clippy::redundant_closure)]
 use {
     solana_cli::{
@@ -34,7 +34,7 @@ fn test_transfer() {
     let faucet_addr = run_local_faucet(mint_keypair, None);
     let test_validator = TestValidator::with_custom_fees(
         mint_pubkey,
-        1,
+        fee_one_sig,
         Some(faucet_addr),
         SocketAddrSpace::Unspecified,
     );
@@ -50,7 +50,7 @@ fn test_transfer() {
     config.signers = vec![&default_signer];
 
     let sender_pubkey = config.signers[0].pubkey();
-    let recipient_pubkey = Pubkey::new(&[1u8; 32]);
+    let recipient_pubkey = Pubkey::from([1u8; 32]);
 
     request_and_confirm_airdrop(&rpc_client, &config, &sender_pubkey, sol_to_lamports(5.0))
         .unwrap();
@@ -325,18 +325,19 @@ fn test_transfer() {
 #[test]
 fn test_transfer_multisession_signing() {
     solana_logger::setup();
-    let fee = FeeStructure::default().get_max_fee(2, 0);
+    let fee_one_sig = FeeStructure::default().get_max_fee(1, 0);
+    let fee_two_sig = FeeStructure::default().get_max_fee(2, 0);
     let mint_keypair = Keypair::new();
     let mint_pubkey = mint_keypair.pubkey();
     let faucet_addr = run_local_faucet(mint_keypair, None);
     let test_validator = TestValidator::with_custom_fees(
         mint_pubkey,
-        1,
+        fee_one_sig,
         Some(faucet_addr),
         SocketAddrSpace::Unspecified,
     );
 
-    let to_pubkey = Pubkey::new(&[1u8; 32]);
+    let to_pubkey = Pubkey::from([1u8; 32]);
     let offline_from_signer = keypair_from_seed(&[2u8; 32]).unwrap();
     let offline_fee_payer_signer = keypair_from_seed(&[3u8; 32]).unwrap();
     let from_null_signer = NullSigner::new(&offline_from_signer.pubkey());
@@ -355,7 +356,7 @@ fn test_transfer_multisession_signing() {
         &rpc_client,
         &CliConfig::recent_for_tests(),
         &offline_fee_payer_signer.pubkey(),
-        sol_to_lamports(1.0) + 2 * fee,
+        sol_to_lamports(1.0) + 2 * fee_two_sig,
     )
     .unwrap();
     check_balance!(
@@ -364,7 +365,7 @@ fn test_transfer_multisession_signing() {
         &offline_from_signer.pubkey(),
     );
     check_balance!(
-        sol_to_lamports(1.0) + 2 * fee,
+        sol_to_lamports(1.0) + 2 * fee_two_sig,
         &rpc_client,
         &offline_fee_payer_signer.pubkey(),
     );
@@ -467,7 +468,7 @@ fn test_transfer_multisession_signing() {
         &offline_from_signer.pubkey(),
     );
     check_balance!(
-        sol_to_lamports(1.0) + fee,
+        sol_to_lamports(1.0) + fee_two_sig,
         &rpc_client,
         &offline_fee_payer_signer.pubkey(),
     );
@@ -483,7 +484,7 @@ fn test_transfer_all() {
     let faucet_addr = run_local_faucet(mint_keypair, None);
     let test_validator = TestValidator::with_custom_fees(
         mint_pubkey,
-        1,
+        fee,
         Some(faucet_addr),
         SocketAddrSpace::Unspecified,
     );
@@ -498,7 +499,7 @@ fn test_transfer_all() {
     config.signers = vec![&default_signer];
 
     let sender_pubkey = config.signers[0].pubkey();
-    let recipient_pubkey = Pubkey::new(&[1u8; 32]);
+    let recipient_pubkey = Pubkey::from([1u8; 32]);
 
     request_and_confirm_airdrop(&rpc_client, &config, &sender_pubkey, 500_000).unwrap();
     check_balance!(500_000, &rpc_client, &sender_pubkey);
@@ -552,7 +553,7 @@ fn test_transfer_unfunded_recipient() {
     config.signers = vec![&default_signer];
 
     let sender_pubkey = config.signers[0].pubkey();
-    let recipient_pubkey = Pubkey::new(&[1u8; 32]);
+    let recipient_pubkey = Pubkey::from([1u8; 32]);
 
     request_and_confirm_airdrop(&rpc_client, &config, &sender_pubkey, 50_000).unwrap();
     check_balance!(50_000, &rpc_client, &sender_pubkey);
@@ -592,7 +593,7 @@ fn test_transfer_with_seed() {
     let faucet_addr = run_local_faucet(mint_keypair, None);
     let test_validator = TestValidator::with_custom_fees(
         mint_pubkey,
-        1,
+        fee,
         Some(faucet_addr),
         SocketAddrSpace::Unspecified,
     );
@@ -607,7 +608,7 @@ fn test_transfer_with_seed() {
     config.signers = vec![&default_signer];
 
     let sender_pubkey = config.signers[0].pubkey();
-    let recipient_pubkey = Pubkey::new(&[1u8; 32]);
+    let recipient_pubkey = Pubkey::from([1u8; 32]);
     let derived_address_seed = "seed".to_string();
     let derived_address_program_id = stake::program::id();
     let derived_address = Pubkey::create_with_seed(

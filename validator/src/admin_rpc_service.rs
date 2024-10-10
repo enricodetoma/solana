@@ -1,18 +1,24 @@
 use {
-    jsonrpc_core::{MetaIoHandler, Metadata, Result},
+    crossbeam_channel::Sender,
+    jsonrpc_core::{BoxFuture, ErrorCode, MetaIoHandler, Metadata, Result},
     jsonrpc_core_client::{transports::ipc, RpcError},
     jsonrpc_derive::rpc,
-    jsonrpc_ipc_server::{RequestContext, ServerBuilder},
-    jsonrpc_server_utils::tokio,
+    jsonrpc_ipc_server::{
+        tokio::sync::oneshot::channel as oneshot_channel, RequestContext, ServerBuilder,
+    },
     log::*,
     serde::{de::Deserializer, Deserialize, Serialize},
+    solana_accounts_db::accounts_index::AccountIndex,
     solana_core::{
-        consensus::Tower, tower_storage::TowerStorage, validator::ValidatorStartProgress,
+        admin_rpc_post_init::AdminRpcRequestMetadataPostInit,
+        consensus::{tower_storage::TowerStorage, Tower},
+        repair::repair_service,
+        validator::ValidatorStartProgress,
     },
-    solana_gossip::{cluster_info::ClusterInfo, contact_info::ContactInfo},
+    solana_geyser_plugin_manager::GeyserPluginManagerRequest,
+    solana_gossip::contact_info::{ContactInfo, Protocol, SOCKET_ADDR_UNSPECIFIED},
     solana_rpc::rpc::verify_pubkey,
     solana_rpc_client_api::{config::RpcAccountIndex, custom_error::RpcCustomError},
-    solana_runtime::{accounts_index::AccountIndex, bank_forks::BankForks},
     solana_sdk::{
         exit::Exit,
         pubkey::Pubkey,
@@ -28,15 +34,8 @@ use {
         thread::{self, Builder},
         time::{Duration, SystemTime},
     },
+    tokio::runtime::Runtime,
 };
-
-#[derive(Clone)]
-pub struct AdminRpcRequestMetadataPostInit {
-    pub cluster_info: Arc<ClusterInfo>,
-    pub bank_forks: Arc<RwLock<BankForks>>,
-    pub vote_account: Pubkey,
-    pub repair_whitelist: Arc<RwLock<HashSet<Pubkey>>>,
-}
 
 #[derive(Clone)]
 pub struct AdminRpcRequestMetadata {
@@ -48,7 +47,9 @@ pub struct AdminRpcRequestMetadata {
     pub tower_storage: Arc<dyn TowerStorage>,
     pub staked_nodes_overrides: Arc<RwLock<HashMap<Pubkey, u64>>>,
     pub post_init: Arc<RwLock<Option<AdminRpcRequestMetadataPostInit>>>,
+    pub rpc_to_plugin_manager_sender: Option<Sender<GeyserPluginManagerRequest>>,
 }
+
 impl Metadata for AdminRpcRequestMetadata {}
 
 impl AdminRpcRequestMetadata {
@@ -71,8 +72,8 @@ pub struct AdminRpcContactInfo {
     pub id: String,
     pub gossip: SocketAddr,
     pub tvu: SocketAddr,
-    pub tvu_forwards: SocketAddr,
-    pub repair: SocketAddr,
+    pub tvu_quic: SocketAddr,
+    pub serve_repair_quic: SocketAddr,
     pub tpu: SocketAddr,
     pub tpu_forwards: SocketAddr,
     pub tpu_vote: SocketAddr,
@@ -89,36 +90,29 @@ pub struct AdminRpcRepairWhitelist {
 }
 
 impl From<ContactInfo> for AdminRpcContactInfo {
-    fn from(contact_info: ContactInfo) -> Self {
-        let ContactInfo {
-            id,
-            gossip,
-            tvu,
-            tvu_forwards,
-            repair,
-            tpu,
-            tpu_forwards,
-            tpu_vote,
-            rpc,
-            rpc_pubsub,
-            serve_repair,
-            wallclock,
-            shred_version,
-        } = contact_info;
+    fn from(node: ContactInfo) -> Self {
+        macro_rules! unwrap_socket {
+            ($name:ident) => {
+                node.$name().unwrap_or(SOCKET_ADDR_UNSPECIFIED)
+            };
+            ($name:ident, $protocol:expr) => {
+                node.$name($protocol).unwrap_or(SOCKET_ADDR_UNSPECIFIED)
+            };
+        }
         Self {
-            id: id.to_string(),
-            last_updated_timestamp: wallclock,
-            gossip,
-            tvu,
-            tvu_forwards,
-            repair,
-            tpu,
-            tpu_forwards,
-            tpu_vote,
-            rpc,
-            rpc_pubsub,
-            serve_repair,
-            shred_version,
+            id: node.pubkey().to_string(),
+            last_updated_timestamp: node.wallclock(),
+            gossip: unwrap_socket!(gossip),
+            tvu: unwrap_socket!(tvu, Protocol::UDP),
+            tvu_quic: unwrap_socket!(tvu, Protocol::QUIC),
+            serve_repair_quic: unwrap_socket!(serve_repair, Protocol::QUIC),
+            tpu: unwrap_socket!(tpu, Protocol::UDP),
+            tpu_forwards: unwrap_socket!(tpu_forwards, Protocol::UDP),
+            tpu_vote: unwrap_socket!(tpu_vote),
+            rpc: unwrap_socket!(rpc),
+            rpc_pubsub: unwrap_socket!(rpc_pubsub),
+            serve_repair: unwrap_socket!(serve_repair, Protocol::UDP),
+            shred_version: node.shred_version(),
         }
     }
 }
@@ -128,8 +122,7 @@ impl Display for AdminRpcContactInfo {
         writeln!(f, "Identity: {}", self.id)?;
         writeln!(f, "Gossip: {}", self.gossip)?;
         writeln!(f, "TVU: {}", self.tvu)?;
-        writeln!(f, "TVU Forwards: {}", self.tvu_forwards)?;
-        writeln!(f, "Repair: {}", self.repair)?;
+        writeln!(f, "TVU QUIC: {}", self.tvu_quic)?;
         writeln!(f, "TPU: {}", self.tpu)?;
         writeln!(f, "TPU Forwards: {}", self.tpu_forwards)?;
         writeln!(f, "TPU Votes: {}", self.tpu_vote)?;
@@ -153,6 +146,23 @@ pub trait AdminRpc {
 
     #[rpc(meta, name = "exit")]
     fn exit(&self, meta: Self::Metadata) -> Result<()>;
+
+    #[rpc(meta, name = "reloadPlugin")]
+    fn reload_plugin(
+        &self,
+        meta: Self::Metadata,
+        name: String,
+        config_file: String,
+    ) -> BoxFuture<Result<()>>;
+
+    #[rpc(meta, name = "unloadPlugin")]
+    fn unload_plugin(&self, meta: Self::Metadata, name: String) -> BoxFuture<Result<()>>;
+
+    #[rpc(meta, name = "loadPlugin")]
+    fn load_plugin(&self, meta: Self::Metadata, config_file: String) -> BoxFuture<Result<String>>;
+
+    #[rpc(meta, name = "listPlugins")]
+    fn list_plugins(&self, meta: Self::Metadata) -> BoxFuture<Result<Vec<String>>>;
 
     #[rpc(meta, name = "rpcAddress")]
     fn rpc_addr(&self, meta: Self::Metadata) -> Result<Option<SocketAddr>>;
@@ -198,6 +208,15 @@ pub trait AdminRpc {
     #[rpc(meta, name = "contactInfo")]
     fn contact_info(&self, meta: Self::Metadata) -> Result<AdminRpcContactInfo>;
 
+    #[rpc(meta, name = "repairShredFromPeer")]
+    fn repair_shred_from_peer(
+        &self,
+        meta: Self::Metadata,
+        pubkey: Option<Pubkey>,
+        slot: u64,
+        shred_index: u64,
+    ) -> Result<()>;
+
     #[rpc(meta, name = "repairWhitelist")]
     fn repair_whitelist(&self, meta: Self::Metadata) -> Result<AdminRpcRepairWhitelist>;
 
@@ -210,6 +229,20 @@ pub trait AdminRpc {
         meta: Self::Metadata,
         pubkey_str: String,
     ) -> Result<HashMap<RpcAccountIndex, usize>>;
+
+    #[rpc(meta, name = "setPublicTpuAddress")]
+    fn set_public_tpu_address(
+        &self,
+        meta: Self::Metadata,
+        public_tpu_addr: SocketAddr,
+    ) -> Result<()>;
+
+    #[rpc(meta, name = "setPublicTpuForwardsAddress")]
+    fn set_public_tpu_forwards_address(
+        &self,
+        meta: Self::Metadata,
+        public_tpu_forwards_addr: SocketAddr,
+    ) -> Result<()>;
 }
 
 pub struct AdminRpcImpl;
@@ -239,6 +272,121 @@ impl AdminRpc for AdminRpcImpl {
             })
             .unwrap();
         Ok(())
+    }
+
+    fn reload_plugin(
+        &self,
+        meta: Self::Metadata,
+        name: String,
+        config_file: String,
+    ) -> BoxFuture<Result<()>> {
+        Box::pin(async move {
+            // Construct channel for plugin to respond to this particular rpc request instance
+            let (response_sender, response_receiver) = oneshot_channel();
+
+            // Send request to plugin manager if there is a geyser service
+            if let Some(ref rpc_to_manager_sender) = meta.rpc_to_plugin_manager_sender {
+                rpc_to_manager_sender
+                    .send(GeyserPluginManagerRequest::ReloadPlugin {
+                        name,
+                        config_file,
+                        response_sender,
+                    })
+                    .expect("GeyerPluginService should never drop request receiver");
+            } else {
+                return Err(jsonrpc_core::Error {
+                    code: ErrorCode::InvalidRequest,
+                    message: "No geyser plugin service".to_string(),
+                    data: None,
+                });
+            }
+
+            // Await response from plugin manager
+            response_receiver
+                .await
+                .expect("GeyerPluginService's oneshot sender shouldn't drop early")
+        })
+    }
+
+    fn load_plugin(&self, meta: Self::Metadata, config_file: String) -> BoxFuture<Result<String>> {
+        Box::pin(async move {
+            // Construct channel for plugin to respond to this particular rpc request instance
+            let (response_sender, response_receiver) = oneshot_channel();
+
+            // Send request to plugin manager if there is a geyser service
+            if let Some(ref rpc_to_manager_sender) = meta.rpc_to_plugin_manager_sender {
+                rpc_to_manager_sender
+                    .send(GeyserPluginManagerRequest::LoadPlugin {
+                        config_file,
+                        response_sender,
+                    })
+                    .expect("GeyerPluginService should never drop request receiver");
+            } else {
+                return Err(jsonrpc_core::Error {
+                    code: ErrorCode::InvalidRequest,
+                    message: "No geyser plugin service".to_string(),
+                    data: None,
+                });
+            }
+
+            // Await response from plugin manager
+            response_receiver
+                .await
+                .expect("GeyerPluginService's oneshot sender shouldn't drop early")
+        })
+    }
+
+    fn unload_plugin(&self, meta: Self::Metadata, name: String) -> BoxFuture<Result<()>> {
+        Box::pin(async move {
+            // Construct channel for plugin to respond to this particular rpc request instance
+            let (response_sender, response_receiver) = oneshot_channel();
+
+            // Send request to plugin manager if there is a geyser service
+            if let Some(ref rpc_to_manager_sender) = meta.rpc_to_plugin_manager_sender {
+                rpc_to_manager_sender
+                    .send(GeyserPluginManagerRequest::UnloadPlugin {
+                        name,
+                        response_sender,
+                    })
+                    .expect("GeyerPluginService should never drop request receiver");
+            } else {
+                return Err(jsonrpc_core::Error {
+                    code: ErrorCode::InvalidRequest,
+                    message: "No geyser plugin service".to_string(),
+                    data: None,
+                });
+            }
+
+            // Await response from plugin manager
+            response_receiver
+                .await
+                .expect("GeyerPluginService's oneshot sender shouldn't drop early")
+        })
+    }
+
+    fn list_plugins(&self, meta: Self::Metadata) -> BoxFuture<Result<Vec<String>>> {
+        Box::pin(async move {
+            // Construct channel for plugin to respond to this particular rpc request instance
+            let (response_sender, response_receiver) = oneshot_channel();
+
+            // Send request to plugin manager
+            if let Some(ref rpc_to_manager_sender) = meta.rpc_to_plugin_manager_sender {
+                rpc_to_manager_sender
+                    .send(GeyserPluginManagerRequest::ListPlugins { response_sender })
+                    .expect("GeyerPluginService should never drop request receiver");
+            } else {
+                return Err(jsonrpc_core::Error {
+                    code: ErrorCode::InvalidRequest,
+                    message: "No geyser plugin service".to_string(),
+                    data: None,
+                });
+            }
+
+            // Await response from plugin manager
+            response_receiver
+                .await
+                .expect("GeyerPluginService's oneshot sender shouldn't drop early")
+        })
     }
 
     fn rpc_addr(&self, meta: Self::Metadata) -> Result<Option<SocketAddr>> {
@@ -339,7 +487,7 @@ impl AdminRpc for AdminRpcImpl {
             .staked_map_id;
         let mut write_staked_nodes = meta.staked_nodes_overrides.write().unwrap();
         write_staked_nodes.clear();
-        write_staked_nodes.extend(loaded_config.into_iter());
+        write_staked_nodes.extend(loaded_config);
         info!("Staked nodes overrides loaded from {}", path);
         debug!("overrides map: {:?}", write_staked_nodes);
         Ok(())
@@ -347,6 +495,29 @@ impl AdminRpc for AdminRpcImpl {
 
     fn contact_info(&self, meta: Self::Metadata) -> Result<AdminRpcContactInfo> {
         meta.with_post_init(|post_init| Ok(post_init.cluster_info.my_contact_info().into()))
+    }
+
+    fn repair_shred_from_peer(
+        &self,
+        meta: Self::Metadata,
+        pubkey: Option<Pubkey>,
+        slot: u64,
+        shred_index: u64,
+    ) -> Result<()> {
+        debug!("repair_shred_from_peer request received");
+
+        meta.with_post_init(|post_init| {
+            repair_service::RepairService::request_repair_for_shred_from_peer(
+                post_init.cluster_info.clone(),
+                post_init.cluster_slots.clone(),
+                pubkey,
+                slot,
+                shred_index,
+                &post_init.repair_socket.clone(),
+                post_init.outstanding_repair_requests.clone(),
+            );
+            Ok(())
+        })
     }
 
     fn repair_whitelist(&self, meta: Self::Metadata) -> Result<AdminRpcRepairWhitelist> {
@@ -429,6 +600,80 @@ impl AdminRpc for AdminRpcImpl {
             Ok(found_sizes)
         })
     }
+
+    fn set_public_tpu_address(
+        &self,
+        meta: Self::Metadata,
+        public_tpu_addr: SocketAddr,
+    ) -> Result<()> {
+        debug!("set_public_tpu_address rpc request received: {public_tpu_addr}");
+
+        meta.with_post_init(|post_init| {
+            post_init
+                .cluster_info
+                .my_contact_info()
+                .tpu(Protocol::UDP)
+                .map_err(|err| {
+                    error!(
+                        "The public TPU address isn't being published. The node is likely in \
+                         repair mode. See help for --restricted-repair-only-mode for more \
+                         information. {err}"
+                    );
+                    jsonrpc_core::error::Error::internal_error()
+                })?;
+            post_init
+                .cluster_info
+                .set_tpu(public_tpu_addr)
+                .map_err(|err| {
+                    error!("Failed to set public TPU address to {public_tpu_addr}: {err}");
+                    jsonrpc_core::error::Error::internal_error()
+                })?;
+            let my_contact_info = post_init.cluster_info.my_contact_info();
+            warn!(
+                "Public TPU addresses set to {:?} (udp) and {:?} (quic)",
+                my_contact_info.tpu(Protocol::UDP),
+                my_contact_info.tpu(Protocol::QUIC),
+            );
+            Ok(())
+        })
+    }
+
+    fn set_public_tpu_forwards_address(
+        &self,
+        meta: Self::Metadata,
+        public_tpu_forwards_addr: SocketAddr,
+    ) -> Result<()> {
+        debug!("set_public_tpu_forwards_address rpc request received: {public_tpu_forwards_addr}");
+
+        meta.with_post_init(|post_init| {
+            post_init
+                .cluster_info
+                .my_contact_info()
+                .tpu_forwards(Protocol::UDP)
+                .map_err(|err| {
+                    error!(
+                        "The public TPU Forwards address isn't being published. The node is \
+                         likely in repair mode. See help for --restricted-repair-only-mode for \
+                         more information. {err}"
+                    );
+                    jsonrpc_core::error::Error::internal_error()
+                })?;
+            post_init
+                .cluster_info
+                .set_tpu_forwards(public_tpu_forwards_addr)
+                .map_err(|err| {
+                    error!("Failed to set public TPU address to {public_tpu_forwards_addr}: {err}");
+                    jsonrpc_core::error::Error::internal_error()
+                })?;
+            let my_contact_info = post_init.cluster_info.my_contact_info();
+            warn!(
+                "Public TPU Forwards addresses set to {:?} (udp) and {:?} (quic)",
+                my_contact_info.tpu_forwards(Protocol::UDP),
+                my_contact_info.tpu_forwards(Protocol::QUIC),
+            );
+            Ok(())
+        })
+    }
 }
 
 impl AdminRpcImpl {
@@ -466,6 +711,12 @@ impl AdminRpcImpl {
                             err
                         ))
                     })?;
+            }
+
+            for n in post_init.notifies.iter() {
+                if let Err(err) = n.update_key(&identity_keypair) {
+                    error!("Error updating network layer keypair: {err}");
+                }
             }
 
             solana_metrics::set_host_id(identity_keypair.pubkey().to_string());
@@ -515,6 +766,7 @@ pub fn run(ledger_path: &Path, metadata: AdminRpcRequestMetadata) {
                     warn!("Unable to start admin rpc service: {:?}", err);
                 }
                 Ok(server) => {
+                    info!("started admin rpc service!");
                     let close_handle = server.close_handle();
                     validator_exit
                         .write()
@@ -563,8 +815,12 @@ pub async fn connect(ledger_path: &Path) -> std::result::Result<gen_client::Clie
     }
 }
 
-pub fn runtime() -> jsonrpc_server_utils::tokio::runtime::Runtime {
-    jsonrpc_server_utils::tokio::runtime::Runtime::new().expect("new tokio runtime")
+pub fn runtime() -> Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_name("solAdminRpcRt")
+        .enable_all()
+        .build()
+        .expect("new tokio runtime")
 }
 
 #[derive(Default, Deserialize, Clone)]
@@ -604,17 +860,18 @@ mod tests {
     use {
         super::*,
         serde_json::Value,
-        solana_account_decoder::parse_token::spl_token_pubkey,
-        solana_core::tower_storage::NullTowerStorage,
+        solana_accounts_db::{accounts_index::AccountSecondaryIndexes, inline_spl_token},
+        solana_core::consensus::tower_storage::NullTowerStorage,
+        solana_gossip::cluster_info::ClusterInfo,
         solana_ledger::genesis_utils::{create_genesis_config, GenesisConfigInfo},
         solana_rpc::rpc::create_validator_exit,
         solana_runtime::{
-            accounts_index::AccountSecondaryIndexes,
             bank::{Bank, BankTestConfig},
-            inline_spl_token,
+            bank_forks::BankForks,
         },
         solana_sdk::{
             account::{Account, AccountSharedData},
+            pubkey::Pubkey,
             system_program,
         },
         solana_streamer::socket::SocketAddrSpace,
@@ -642,17 +899,18 @@ mod tests {
         }
 
         fn start_with_config(config: TestConfig) -> Self {
-            let identity = Pubkey::new_unique();
+            let keypair = Arc::new(Keypair::new());
             let cluster_info = Arc::new(ClusterInfo::new(
-                ContactInfo {
-                    id: identity,
-                    ..ContactInfo::default()
-                },
-                Arc::new(Keypair::new()),
+                ContactInfo::new(
+                    keypair.pubkey(),
+                    solana_sdk::timing::timestamp(), // wallclock
+                    0u16,                            // shred_version
+                ),
+                keypair,
                 SocketAddrSpace::Unspecified,
             ));
             let exit = Arc::new(AtomicBool::new(false));
-            let validator_exit = create_validator_exit(&exit);
+            let validator_exit = create_validator_exit(exit);
             let (bank_forks, vote_keypair) = new_bank_forks_with_config(BankTestConfig {
                 secondary_indexes: config.account_indexes,
             });
@@ -671,8 +929,17 @@ mod tests {
                     bank_forks: bank_forks.clone(),
                     vote_account,
                     repair_whitelist,
+                    notifies: Vec::new(),
+                    repair_socket: Arc::new(std::net::UdpSocket::bind("0.0.0.0:0").unwrap()),
+                    outstanding_repair_requests: Arc::<
+                        RwLock<repair_service::OutstandingShredRepairs>,
+                    >::default(),
+                    cluster_slots: Arc::new(
+                        solana_core::cluster_slots_service::cluster_slots::ClusterSlots::default(),
+                    ),
                 }))),
                 staked_nodes_overrides: Arc::new(RwLock::new(HashMap::new())),
+                rpc_to_plugin_manager_sender: None,
             };
             let mut io = MetaIoHandler::default();
             io.extend_with(AdminRpcImpl.to_delegate());
@@ -699,10 +966,7 @@ mod tests {
         } = create_genesis_config(1_000_000_000);
 
         let bank = Bank::new_for_tests_with_config(&genesis_config, config);
-        (
-            Arc::new(RwLock::new(BankForks::new(bank))),
-            Arc::new(voting_keypair),
-        )
+        (BankForks::new_rw_arc(bank), Arc::new(voting_keypair))
     }
 
     #[test]
@@ -736,7 +1000,7 @@ mod tests {
             let wallet1_pubkey = Pubkey::new_unique();
             let wallet2_pubkey = Pubkey::new_unique();
             let non_existent_pubkey = Pubkey::new_unique();
-            let delegate = spl_token_pubkey(&Pubkey::new_unique());
+            let delegate = Pubkey::new_unique();
 
             let mut num_default_spl_token_program_accounts = 0;
             let mut num_default_system_program_accounts = 0;
@@ -798,14 +1062,14 @@ mod tests {
             // Add a token account
             let mut account1_data = vec![0; TokenAccount::get_packed_len()];
             let token_account1 = TokenAccount {
-                mint: spl_token_pubkey(&mint1_pubkey),
-                owner: spl_token_pubkey(&wallet1_pubkey),
+                mint: mint1_pubkey,
+                owner: wallet1_pubkey,
                 delegate: COption::Some(delegate),
                 amount: 420,
                 state: TokenAccountState::Initialized,
                 is_native: COption::None,
                 delegated_amount: 30,
-                close_authority: COption::Some(spl_token_pubkey(&wallet1_pubkey)),
+                close_authority: COption::Some(wallet1_pubkey),
             };
             TokenAccount::pack(token_account1, &mut account1_data).unwrap();
             let token_account1 = AccountSharedData::from(Account {
@@ -819,11 +1083,11 @@ mod tests {
             // Add the mint
             let mut mint1_data = vec![0; Mint::get_packed_len()];
             let mint1_state = Mint {
-                mint_authority: COption::Some(spl_token_pubkey(&wallet1_pubkey)),
+                mint_authority: COption::Some(wallet1_pubkey),
                 supply: 500,
                 decimals: 2,
                 is_initialized: true,
-                freeze_authority: COption::Some(spl_token_pubkey(&wallet1_pubkey)),
+                freeze_authority: COption::Some(wallet1_pubkey),
             };
             Mint::pack(mint1_state, &mut mint1_data).unwrap();
             let mint_account1 = AccountSharedData::from(Account {
@@ -837,14 +1101,14 @@ mod tests {
             // Add another token account with the different owner, but same delegate, and mint
             let mut account2_data = vec![0; TokenAccount::get_packed_len()];
             let token_account2 = TokenAccount {
-                mint: spl_token_pubkey(&mint1_pubkey),
-                owner: spl_token_pubkey(&wallet2_pubkey),
+                mint: mint1_pubkey,
+                owner: wallet2_pubkey,
                 delegate: COption::Some(delegate),
                 amount: 420,
                 state: TokenAccountState::Initialized,
                 is_native: COption::None,
                 delegated_amount: 30,
-                close_authority: COption::Some(spl_token_pubkey(&wallet2_pubkey)),
+                close_authority: COption::Some(wallet2_pubkey),
             };
             TokenAccount::pack(token_account2, &mut account2_data).unwrap();
             let token_account2 = AccountSharedData::from(Account {
@@ -858,14 +1122,14 @@ mod tests {
             // Add another token account with the same owner and delegate but different mint
             let mut account3_data = vec![0; TokenAccount::get_packed_len()];
             let token_account3 = TokenAccount {
-                mint: spl_token_pubkey(&mint2_pubkey),
-                owner: spl_token_pubkey(&wallet2_pubkey),
+                mint: mint2_pubkey,
+                owner: wallet2_pubkey,
                 delegate: COption::Some(delegate),
                 amount: 42,
                 state: TokenAccountState::Initialized,
                 is_native: COption::None,
                 delegated_amount: 30,
-                close_authority: COption::Some(spl_token_pubkey(&wallet2_pubkey)),
+                close_authority: COption::Some(wallet2_pubkey),
             };
             TokenAccount::pack(token_account3, &mut account3_data).unwrap();
             let token_account3 = AccountSharedData::from(Account {
@@ -879,11 +1143,11 @@ mod tests {
             // Add the new mint
             let mut mint2_data = vec![0; Mint::get_packed_len()];
             let mint2_state = Mint {
-                mint_authority: COption::Some(spl_token_pubkey(&wallet2_pubkey)),
+                mint_authority: COption::Some(wallet2_pubkey),
                 supply: 200,
                 decimals: 3,
                 is_initialized: true,
-                freeze_authority: COption::Some(spl_token_pubkey(&wallet2_pubkey)),
+                freeze_authority: COption::Some(wallet2_pubkey),
             };
             Mint::pack(mint2_state, &mut mint2_data).unwrap();
             let mint_account2 = AccountSharedData::from(Account {
@@ -911,7 +1175,7 @@ mod tests {
             //               --mint_account1--               mint_account2
 
             if secondary_index_enabled {
-                // ----------- Test for a non-existant key -----------
+                // ----------- Test for a non-existent key -----------
                 let req = format!(
                     r#"{{"jsonrpc":"2.0","id":1,"method":"getSecondaryIndexKeySize","params":["{non_existent_pubkey}"]}}"#,
                 );

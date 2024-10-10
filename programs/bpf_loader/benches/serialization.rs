@@ -109,7 +109,7 @@ fn create_inputs(owner: Pubkey, num_instruction_accounts: usize) -> TransactionC
     }
 
     let mut transaction_context =
-        TransactionContext::new(transaction_accounts, Some(Rent::default()), 1, 1);
+        TransactionContext::new(transaction_accounts, Rent::default(), 1, 1);
     let instruction_data = vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
     transaction_context
         .get_next_instruction_context()
@@ -121,6 +121,17 @@ fn create_inputs(owner: Pubkey, num_instruction_accounts: usize) -> TransactionC
 
 #[bench]
 fn bench_serialize_unaligned(bencher: &mut Bencher) {
+    let transaction_context = create_inputs(bpf_loader_deprecated::id(), 7);
+    let instruction_context = transaction_context
+        .get_current_instruction_context()
+        .unwrap();
+    bencher.iter(|| {
+        let _ = serialize_parameters(&transaction_context, instruction_context, false).unwrap();
+    });
+}
+
+#[bench]
+fn bench_serialize_unaligned_copy_account_data(bencher: &mut Bencher) {
     let transaction_context = create_inputs(bpf_loader_deprecated::id(), 7);
     let instruction_context = transaction_context
         .get_current_instruction_context()
@@ -138,6 +149,18 @@ fn bench_serialize_aligned(bencher: &mut Bencher) {
         .unwrap();
 
     bencher.iter(|| {
+        let _ = serialize_parameters(&transaction_context, instruction_context, false).unwrap();
+    });
+}
+
+#[bench]
+fn bench_serialize_aligned_copy_account_data(bencher: &mut Bencher) {
+    let transaction_context = create_inputs(bpf_loader::id(), 7);
+    let instruction_context = transaction_context
+        .get_current_instruction_context()
+        .unwrap();
+
+    bencher.iter(|| {
         let _ = serialize_parameters(&transaction_context, instruction_context, true).unwrap();
     });
 }
@@ -149,7 +172,7 @@ fn bench_serialize_unaligned_max_accounts(bencher: &mut Bencher) {
         .get_current_instruction_context()
         .unwrap();
     bencher.iter(|| {
-        let _ = serialize_parameters(&transaction_context, instruction_context, true).unwrap();
+        let _ = serialize_parameters(&transaction_context, instruction_context, false).unwrap();
     });
 }
 
@@ -161,6 +184,6 @@ fn bench_serialize_aligned_max_accounts(bencher: &mut Bencher) {
         .unwrap();
 
     bencher.iter(|| {
-        let _ = serialize_parameters(&transaction_context, instruction_context, true).unwrap();
+        let _ = serialize_parameters(&transaction_context, instruction_context, false).unwrap();
     });
 }

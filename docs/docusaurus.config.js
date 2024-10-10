@@ -1,10 +1,10 @@
 const math = require("remark-math");
 const katex = require("rehype-katex");
 module.exports = {
-  title: "Solana Docs",
+  title: "Solana Validator",
   tagline:
     "Solana is an open source project implementing a new, high-performance, permissionless blockchain.",
-  url: "https://docs.solana.com",
+  url: "https://docs.solanalabs.com",
   baseUrl: "/",
   favicon: "img/favicon.ico",
   organizationName: "solana-labs", // Usually your GitHub org/user name.
@@ -45,6 +45,9 @@ module.exports = {
     },
   },
   themeConfig: {
+    prism: {
+      additionalLanguages: ["rust"],
+    },
     navbar: {
       logo: {
         alt: "Solana Logo",
@@ -53,43 +56,28 @@ module.exports = {
       },
       items: [
         {
-          to: "introduction",
-          label: "Learn",
-          position: "left",
-        },
-        {
-          to: "cluster/overview",
-          label: "Architecture",
-          position: "left",
-        },
-        {
           to: "cli",
           label: "CLI",
           position: "left",
         },
         {
-          to: "/developers",
-          label: "Developers",
+          to: "architecture",
+          label: "Architecture",
           position: "left",
         },
         {
-          to: "running-validator",
-          label: "Validators",
+          to: "operations",
+          label: "Operating a Validator",
           position: "left",
         },
         {
           label: "More",
           position: "left",
           items: [
-            { label: "Terminology", to: "terminology" },
-            { label: "Staking", to: "staking" },
-            { label: "Integrations", to: "integrations/exchange" },
-            { label: "Economics", to: "economics_overview" },
             { label: "Proposals", to: "proposals" },
             {
               href: "https://spl.solana.com",
-              label: "Solana Program Library »",
-              position: "left",
+              label: "Solana Program Library",
             },
           ],
         },
@@ -98,7 +86,7 @@ module.exports = {
           position: "right",
         },
         {
-          href: "https://discordapp.com/invite/pquxPsq",
+          href: "https://solana.com/discord",
           // label: "Discord",
           className: "header-link-icon header-discord-link",
           "aria-label": "Solana Discord",
@@ -115,7 +103,8 @@ module.exports = {
     },
     algolia: {
       // This API key is "search-only" and safe to be published
-      apiKey: "d58e0d68c875346d52645d68b13f3ac0",
+      apiKey: "011e01358301f5023b02da5db6af7f4d",
+      appId: "FQ12ISJR4B",
       indexName: "solana",
       contextualSearch: true,
     },
@@ -126,16 +115,12 @@ module.exports = {
           title: "Documentation",
           items: [
             {
-              label: "Learn",
-              to: "introduction",
+              label: "Developers »",
+              href: "https://solana.com/developers",
             },
             {
-              label: "Developers",
-              to: "/developers",
-            },
-            {
-              label: "Validators",
-              to: "running-validator",
+              label: "Running a Validator",
+              to: "operations",
             },
             {
               label: "Command Line",
@@ -143,7 +128,7 @@ module.exports = {
             },
             {
               label: "Architecture",
-              to: "cluster/overview",
+              to: "architecture",
             },
           ],
         },
@@ -160,15 +145,15 @@ module.exports = {
             },
             {
               label: "Discord »",
-              href: "https://discordapp.com/invite/pquxPsq",
+              href: "https://solana.com/discord",
             },
             {
               label: "Twitter »",
-              href: "https://twitter.com/solana",
+              href: "https://solana.com/twitter",
             },
             {
-              label: "Forums »",
-              href: "https://forums.solana.com",
+              label: "Forum »",
+              href: "https://forum.solana.com",
             },
           ],
         },
@@ -176,12 +161,12 @@ module.exports = {
           title: "Resources",
           items: [
             {
-              label: "Proposals",
-              to: "proposals",
+              label: "Terminology »",
+              href: "https://solana.com/docs/terminology",
             },
             {
-              label: "Integrations",
-              to: "integrations/exchange",
+              label: "Proposals",
+              to: "proposals",
             },
             {
               href: "https://spl.solana.com",
@@ -190,7 +175,7 @@ module.exports = {
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Solana Foundation`,
+      copyright: `Copyright © ${new Date().getFullYear()} Solana Labs`,
     },
   },
   presets: [
@@ -199,6 +184,7 @@ module.exports = {
       {
         docs: {
           path: "src",
+          breadcrumbs: true,
           routeBasePath: "/",
           sidebarPath: require.resolve("./sidebars.js"),
           remarkPlugins: [math],
@@ -207,6 +193,12 @@ module.exports = {
         theme: {
           customCss: require.resolve("./src/css/custom.css"),
         },
+        // Google Analytics are only active in prod
+        // gtag: {
+        // this GA code is safe to be published
+        // trackingID: "",
+        // anonymizeIP: true,
+        // },
       },
     ],
   ],

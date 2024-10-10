@@ -1,11 +1,12 @@
 //! Calculation of transaction fees.
 
-#![allow(clippy::integer_arithmetic)]
+#![allow(clippy::arithmetic_side_effects)]
 use {
     crate::{clock::DEFAULT_MS_PER_SLOT, ed25519_program, message::Message, secp256k1_program},
     log::*,
 };
 
+#[repr(C)]
 #[derive(Serialize, Deserialize, Default, PartialEq, Eq, Clone, Copy, Debug, AbiExample)]
 #[serde(rename_all = "camelCase")]
 pub struct FeeCalculator {
@@ -213,8 +214,8 @@ mod tests {
         assert_eq!(FeeCalculator::new(1).calculate_fee(&message), 0);
 
         // One signature, a fee.
-        let pubkey0 = Pubkey::new(&[0; 32]);
-        let pubkey1 = Pubkey::new(&[1; 32]);
+        let pubkey0 = Pubkey::from([0; 32]);
+        let pubkey1 = Pubkey::from([1; 32]);
         let ix0 = system_instruction::transfer(&pubkey0, &pubkey1, 1);
         let message = Message::new(&[ix0], Some(&pubkey0));
         assert_eq!(FeeCalculator::new(2).calculate_fee(&message), 2);
@@ -230,8 +231,8 @@ mod tests {
     #[allow(deprecated)]
     fn test_fee_calculator_calculate_fee_secp256k1() {
         use crate::instruction::Instruction;
-        let pubkey0 = Pubkey::new(&[0; 32]);
-        let pubkey1 = Pubkey::new(&[1; 32]);
+        let pubkey0 = Pubkey::from([0; 32]);
+        let pubkey1 = Pubkey::from([1; 32]);
         let ix0 = system_instruction::transfer(&pubkey0, &pubkey1, 1);
         let mut secp_instruction = Instruction {
             program_id: crate::secp256k1_program::id(),

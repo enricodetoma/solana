@@ -1,5 +1,7 @@
 //! Example Rust-based SBF that tests out using a custom heap
 
+#![allow(clippy::arithmetic_side_effects)]
+
 use {
     solana_program::{
         account_info::AccountInfo,

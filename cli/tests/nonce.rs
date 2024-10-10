@@ -1,4 +1,4 @@
-#![allow(clippy::integer_arithmetic)]
+#![allow(clippy::arithmetic_side_effects)]
 use {
     solana_cli::{
         check_balance,
@@ -249,14 +249,14 @@ fn test_create_account_with_seed() {
     let faucet_addr = run_local_faucet(mint_keypair, None);
     let test_validator = TestValidator::with_custom_fees(
         mint_pubkey,
-        1,
+        sol_to_lamports(ONE_SIG_FEE),
         Some(faucet_addr),
         SocketAddrSpace::Unspecified,
     );
 
     let offline_nonce_authority_signer = keypair_from_seed(&[1u8; 32]).unwrap();
     let online_nonce_creator_signer = keypair_from_seed(&[2u8; 32]).unwrap();
-    let to_address = Pubkey::new(&[3u8; 32]);
+    let to_address = Pubkey::from([3u8; 32]);
 
     // Setup accounts
     let rpc_client =

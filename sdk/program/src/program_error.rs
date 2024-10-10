@@ -1,9 +1,9 @@
 //! The [`ProgramError`] type and related definitions.
 
-#![allow(clippy::integer_arithmetic)]
+#![allow(clippy::arithmetic_side_effects)]
 use {
     crate::{decode_error::DecodeError, instruction::InstructionError, msg, pubkey::PubkeyError},
-    borsh::maybestd::io::Error as BorshIoError,
+    borsh::io::Error as BorshIoError,
     num_traits::{FromPrimitive, ToPrimitive},
     std::convert::TryFrom,
     thiserror::Error,
@@ -17,7 +17,7 @@ pub enum ProgramError {
     /// or serialized to a u32 integer.
     #[error("Custom program error: {0:#x}")]
     Custom(u32),
-    #[error("The arguments provided to a program instruction where invalid")]
+    #[error("The arguments provided to a program instruction were invalid")]
     InvalidArgument,
     #[error("An instruction's data contents was invalid")]
     InvalidInstructionData,
@@ -57,6 +57,16 @@ pub enum ProgramError {
     InvalidRealloc,
     #[error("Instruction trace length exceeded the maximum allowed per transaction")]
     MaxInstructionTraceLengthExceeded,
+    #[error("Builtin programs must consume compute units")]
+    BuiltinProgramsMustConsumeComputeUnits,
+    #[error("Invalid account owner")]
+    InvalidAccountOwner,
+    #[error("Program arithmetic overflowed")]
+    ArithmeticOverflow,
+    #[error("Account is immutable")]
+    Immutable,
+    #[error("Incorrect authority provided")]
+    IncorrectAuthority,
 }
 
 pub trait PrintProgramError {
@@ -102,6 +112,13 @@ impl PrintProgramError for ProgramError {
             Self::MaxInstructionTraceLengthExceeded => {
                 msg!("Error: MaxInstructionTraceLengthExceeded")
             }
+            Self::BuiltinProgramsMustConsumeComputeUnits => {
+                msg!("Error: BuiltinProgramsMustConsumeComputeUnits")
+            }
+            Self::InvalidAccountOwner => msg!("Error: InvalidAccountOwner"),
+            Self::ArithmeticOverflow => msg!("Error: ArithmeticOverflow"),
+            Self::Immutable => msg!("Error: Immutable"),
+            Self::IncorrectAuthority => msg!("Error: IncorrectAuthority"),
         }
     }
 }
@@ -135,6 +152,11 @@ pub const ILLEGAL_OWNER: u64 = to_builtin!(18);
 pub const MAX_ACCOUNTS_DATA_ALLOCATIONS_EXCEEDED: u64 = to_builtin!(19);
 pub const INVALID_ACCOUNT_DATA_REALLOC: u64 = to_builtin!(20);
 pub const MAX_INSTRUCTION_TRACE_LENGTH_EXCEEDED: u64 = to_builtin!(21);
+pub const BUILTIN_PROGRAMS_MUST_CONSUME_COMPUTE_UNITS: u64 = to_builtin!(22);
+pub const INVALID_ACCOUNT_OWNER: u64 = to_builtin!(23);
+pub const ARITHMETIC_OVERFLOW: u64 = to_builtin!(24);
+pub const IMMUTABLE: u64 = to_builtin!(25);
+pub const INCORRECT_AUTHORITY: u64 = to_builtin!(26);
 // Warning: Any new program errors added here must also be:
 // - Added to the below conversions
 // - Added as an equivalent to InstructionError
@@ -168,6 +190,13 @@ impl From<ProgramError> for u64 {
             ProgramError::MaxInstructionTraceLengthExceeded => {
                 MAX_INSTRUCTION_TRACE_LENGTH_EXCEEDED
             }
+            ProgramError::BuiltinProgramsMustConsumeComputeUnits => {
+                BUILTIN_PROGRAMS_MUST_CONSUME_COMPUTE_UNITS
+            }
+            ProgramError::InvalidAccountOwner => INVALID_ACCOUNT_OWNER,
+            ProgramError::ArithmeticOverflow => ARITHMETIC_OVERFLOW,
+            ProgramError::Immutable => IMMUTABLE,
+            ProgramError::IncorrectAuthority => INCORRECT_AUTHORITY,
             ProgramError::Custom(error) => {
                 if error == 0 {
                     CUSTOM_ZERO
@@ -203,6 +232,13 @@ impl From<u64> for ProgramError {
             MAX_ACCOUNTS_DATA_ALLOCATIONS_EXCEEDED => Self::MaxAccountsDataAllocationsExceeded,
             INVALID_ACCOUNT_DATA_REALLOC => Self::InvalidRealloc,
             MAX_INSTRUCTION_TRACE_LENGTH_EXCEEDED => Self::MaxInstructionTraceLengthExceeded,
+            BUILTIN_PROGRAMS_MUST_CONSUME_COMPUTE_UNITS => {
+                Self::BuiltinProgramsMustConsumeComputeUnits
+            }
+            INVALID_ACCOUNT_OWNER => Self::InvalidAccountOwner,
+            ARITHMETIC_OVERFLOW => Self::ArithmeticOverflow,
+            IMMUTABLE => Self::Immutable,
+            INCORRECT_AUTHORITY => Self::IncorrectAuthority,
             _ => Self::Custom(error as u32),
         }
     }
@@ -238,6 +274,13 @@ impl TryFrom<InstructionError> for ProgramError {
             Self::Error::MaxInstructionTraceLengthExceeded => {
                 Ok(Self::MaxInstructionTraceLengthExceeded)
             }
+            Self::Error::BuiltinProgramsMustConsumeComputeUnits => {
+                Ok(Self::BuiltinProgramsMustConsumeComputeUnits)
+            }
+            Self::Error::InvalidAccountOwner => Ok(Self::InvalidAccountOwner),
+            Self::Error::ArithmeticOverflow => Ok(Self::ArithmeticOverflow),
+            Self::Error::Immutable => Ok(Self::Immutable),
+            Self::Error::IncorrectAuthority => Ok(Self::IncorrectAuthority),
             _ => Err(error),
         }
     }
@@ -271,6 +314,13 @@ where
             MAX_ACCOUNTS_DATA_ALLOCATIONS_EXCEEDED => Self::MaxAccountsDataAllocationsExceeded,
             INVALID_ACCOUNT_DATA_REALLOC => Self::InvalidRealloc,
             MAX_INSTRUCTION_TRACE_LENGTH_EXCEEDED => Self::MaxInstructionTraceLengthExceeded,
+            BUILTIN_PROGRAMS_MUST_CONSUME_COMPUTE_UNITS => {
+                Self::BuiltinProgramsMustConsumeComputeUnits
+            }
+            INVALID_ACCOUNT_OWNER => Self::InvalidAccountOwner,
+            ARITHMETIC_OVERFLOW => Self::ArithmeticOverflow,
+            IMMUTABLE => Self::Immutable,
+            INCORRECT_AUTHORITY => Self::IncorrectAuthority,
             _ => {
                 // A valid custom error has no bits set in the upper 32
                 if error >> BUILTIN_BIT_SHIFT == 0 {

@@ -1,12 +1,11 @@
 #![allow(dead_code)]
 
 use {
-    solana_bpf_loader_program::{process_instruction, upgradeable::id},
     solana_program_test::*,
     solana_sdk::{
         account::AccountSharedData,
         account_utils::StateMut,
-        bpf_loader_upgradeable::UpgradeableLoaderState,
+        bpf_loader_upgradeable::{id, UpgradeableLoaderState},
         instruction::{Instruction, InstructionError},
         pubkey::Pubkey,
         signature::{Keypair, Signer},
@@ -15,13 +14,13 @@ use {
 };
 
 pub async fn setup_test_context() -> ProgramTestContext {
-    let program_test = ProgramTest::new("", id(), Some(process_instruction));
+    let program_test = ProgramTest::new("", id(), Some(solana_bpf_loader_program::Entrypoint::vm));
     program_test.start_with_context().await
 }
 
 pub async fn assert_ix_error(
     context: &mut ProgramTestContext,
-    ixs: &[Instruction],
+    ix: Instruction,
     additional_payer_keypair: Option<&Keypair>,
     expected_err: InstructionError,
     assertion_failed_msg: &str,
@@ -36,7 +35,7 @@ pub async fn assert_ix_error(
     }
 
     let transaction = Transaction::new_signed_with_payer(
-        ixs,
+        &[ix],
         Some(&fee_payer.pubkey()),
         &signers,
         recent_blockhash,

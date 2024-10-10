@@ -333,9 +333,7 @@ pub fn string_from_winreg_value(val: &winreg::RegValue) -> Option<String> {
             let words = unsafe {
                 slice::from_raw_parts(val.bytes.as_ptr() as *const u16, val.bytes.len() / 2)
             };
-            let mut s = if let Ok(s) = String::from_utf16(words) {
-                s
-            } else {
+            let Ok(mut s) = String::from_utf16(words) else {
                 return None;
             };
             while s.ends_with('\u{0}') {
@@ -392,11 +390,9 @@ fn add_to_path(new_path: &str) -> bool {
         },
     };
 
-    let old_path = if let Some(s) =
+    let Some(old_path) =
         get_windows_path_var().unwrap_or_else(|err| panic!("Unable to get PATH: {}", err))
-    {
-        s
-    } else {
+    else {
         return false;
     };
 
@@ -501,7 +497,6 @@ fn add_to_path(new_path: &str) -> bool {
                     fn append_file(dest: &Path, line: &str) -> io::Result<()> {
                         use std::io::Write;
                         let mut dest_file = fs::OpenOptions::new()
-                            .write(true)
                             .append(true)
                             .create(true)
                             .open(dest)?;
@@ -596,7 +591,9 @@ fn release_channel_version_url(release_channel: &str) -> String {
 }
 
 fn print_update_manifest(update_manifest: &UpdateManifest) {
-    let when = Local.timestamp(update_manifest.timestamp_secs as i64, 0);
+    let when = Local
+        .timestamp_opt(update_manifest.timestamp_secs as i64, 0)
+        .unwrap();
     println_name_value(&format!("{BULLET}release date:"), &when.to_string());
     println_name_value(
         &format!("{BULLET}download URL:"),
@@ -847,6 +844,11 @@ pub struct GithubRelease {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct GithubError {
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct GithubReleases(Vec<GithubRelease>);
 
 fn semver_of(string: &str) -> Result<semver::Version, String> {
@@ -859,14 +861,41 @@ fn semver_of(string: &str) -> Result<semver::Version, String> {
 }
 
 fn check_for_newer_github_release(
-    version_filter: Option<semver::VersionReq>,
+    current_release_semver: &str,
+    semver_update_type: SemverUpdateType,
     prerelease_allowed: bool,
-) -> reqwest::Result<Option<String>> {
-    let mut page = 1;
-    const PER_PAGE: usize = 100;
+) -> Result<Option<String>, String> {
     let client = reqwest::blocking::Client::builder()
         .user_agent("solana-install")
-        .build()?;
+        .build()
+        .map_err(|err| err.to_string())?;
+
+    // If we want a fixed version, we don't need to stress the API to check whether it exists
+    if semver_update_type == SemverUpdateType::Fixed {
+        let download_url = github_release_download_url(current_release_semver);
+        let response = client
+            .head(download_url.as_str())
+            .send()
+            .map_err(|err| err.to_string())?;
+
+        if response.status() == reqwest::StatusCode::OK {
+            return Ok(Some(current_release_semver.to_string()));
+        }
+    }
+
+    let version_filter = semver::VersionReq::parse(&format!(
+        "{}{}",
+        match semver_update_type {
+            SemverUpdateType::Fixed => "=",
+            SemverUpdateType::Patch => "~",
+            SemverUpdateType::_Minor => "^",
+        },
+        current_release_semver
+    ))
+    .ok();
+
+    let mut page = 1;
+    const PER_PAGE: usize = 100;
     let mut all_releases = vec![];
     let mut releases = vec![];
 
@@ -879,39 +908,48 @@ fn check_for_newer_github_release(
             ],
         )
         .unwrap();
-        let request = client.get(url).build()?;
-        let response = client.execute(request)?;
+        let request = client.get(url).build().map_err(|err| err.to_string())?;
+        let response = client.execute(request).map_err(|err| err.to_string())?;
 
-        releases = response
-            .json::<GithubReleases>()?
-            .0
-            .into_iter()
-            .filter_map(
-                |GithubRelease {
-                     tag_name,
-                     prerelease,
-                 }| {
-                    if let Ok(version) = semver_of(&tag_name) {
-                        if (prerelease_allowed || !prerelease)
-                            && version_filter
-                                .as_ref()
-                                .map_or(true, |version_filter| version_filter.matches(&version))
-                        {
-                            return Some(version);
+        if response.status() == reqwest::StatusCode::OK {
+            releases = response
+                .json::<GithubReleases>()
+                .map_err(|err| err.to_string())?
+                .0
+                .into_iter()
+                .filter_map(
+                    |GithubRelease {
+                         tag_name,
+                         prerelease,
+                     }| {
+                        if let Ok(version) = semver_of(&tag_name) {
+                            if (prerelease_allowed || !prerelease)
+                                && version_filter
+                                    .as_ref()
+                                    .map_or(true, |version_filter| version_filter.matches(&version))
+                            {
+                                return Some(version);
+                            }
                         }
-                    }
-                    None
-                },
-            )
-            .collect::<Vec<_>>();
-        all_releases.extend_from_slice(&releases);
-        page += 1;
+                        None
+                    },
+                )
+                .collect::<Vec<_>>();
+            all_releases.extend_from_slice(&releases);
+            page += 1;
+        } else {
+            return Err(response
+                .json::<GithubError>()
+                .map_err(|err| err.to_string())?
+                .message);
+        }
     }
 
     all_releases.sort();
     Ok(all_releases.pop().map(|r| r.to_string()))
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum SemverUpdateType {
     Fixed,
     Patch,
@@ -925,66 +963,62 @@ pub fn update(config_file: &str, check_only: bool) -> Result<bool, String> {
 pub fn init_or_update(config_file: &str, is_init: bool, check_only: bool) -> Result<bool, String> {
     let mut config = Config::load(config_file)?;
 
-    let semver_update_type = if is_init {
-        SemverUpdateType::Fixed
-    } else {
-        SemverUpdateType::Patch
-    };
-
     let (updated_version, download_url_and_sha256, release_dir) = if let Some(explicit_release) =
         &config.explicit_release
     {
         match explicit_release {
             ExplicitRelease::Semver(current_release_semver) => {
-                let progress_bar = new_spinner_progress_bar();
-                progress_bar.set_message(format!("{LOOKING_GLASS}Checking for updates..."));
+                let release_dir = config.release_dir(current_release_semver);
+                if is_init && release_dir.exists() {
+                    (current_release_semver.to_owned(), None, release_dir)
+                } else {
+                    let progress_bar = new_spinner_progress_bar();
+                    progress_bar.set_message(format!("{LOOKING_GLASS}Checking for updates..."));
 
-                let github_release = check_for_newer_github_release(
-                    semver::VersionReq::parse(&format!(
-                        "{}{}",
-                        match semver_update_type {
-                            SemverUpdateType::Fixed => "=",
-                            SemverUpdateType::Patch => "~",
-                            SemverUpdateType::_Minor => "^",
-                        },
-                        current_release_semver
-                    ))
-                    .ok(),
-                    is_init,
-                )
-                .map_err(|err| err.to_string())?;
-                progress_bar.finish_and_clear();
+                    let semver_update_type = if is_init {
+                        SemverUpdateType::Fixed
+                    } else {
+                        SemverUpdateType::Patch
+                    };
+                    let github_release = check_for_newer_github_release(
+                        current_release_semver,
+                        semver_update_type,
+                        is_init,
+                    )?;
 
-                match github_release {
-                    None => {
-                        return Err(format!("Unknown release: {current_release_semver}"));
-                    }
-                    Some(release_semver) => {
-                        if release_semver == *current_release_semver {
-                            if let Ok(active_release_version) = load_release_version(
-                                &config.active_release_dir().join("version.yml"),
-                            ) {
-                                if format!("v{current_release_semver}")
-                                    == active_release_version.channel
-                                {
-                                    println!(
+                    progress_bar.finish_and_clear();
+
+                    match github_release {
+                        None => {
+                            return Err(format!("Unknown release: {current_release_semver}"));
+                        }
+                        Some(release_semver) => {
+                            if release_semver == *current_release_semver {
+                                if let Ok(active_release_version) = load_release_version(
+                                    &config.active_release_dir().join("version.yml"),
+                                ) {
+                                    if format!("v{current_release_semver}")
+                                        == active_release_version.channel
+                                    {
+                                        println!(
                                         "Install is up to date. {release_semver} is the latest compatible release"
                                     );
-                                    return Ok(false);
+                                        return Ok(false);
+                                    }
                                 }
                             }
-                        }
-                        config.explicit_release =
-                            Some(ExplicitRelease::Semver(release_semver.clone()));
+                            config.explicit_release =
+                                Some(ExplicitRelease::Semver(release_semver.clone()));
 
-                        let release_dir = config.release_dir(&release_semver);
-                        let download_url_and_sha256 = if release_dir.exists() {
-                            // Release already present in the cache
-                            None
-                        } else {
-                            Some((github_release_download_url(&release_semver), None))
-                        };
-                        (release_semver, download_url_and_sha256, release_dir)
+                            let release_dir = config.release_dir(&release_semver);
+                            let download_url_and_sha256 = if release_dir.exists() {
+                                // Release already present in the cache
+                                None
+                            } else {
+                                Some((github_release_download_url(&release_semver), None))
+                            };
+                            (release_semver, download_url_and_sha256, release_dir)
+                        }
                     }
                 }
             }
@@ -1133,13 +1167,17 @@ pub fn init_or_update(config_file: &str, is_init: bool, check_only: bool) -> Res
         release_dir.join("solana-release"),
         config.active_release_dir(),
     )
-    .map_err(|err| {
-        format!(
+    .map_err(|err| match err.raw_os_error() {
+        #[cfg(windows)]
+        Some(os_err) if os_err == winapi::shared::winerror::ERROR_PRIVILEGE_NOT_HELD as i32 => {
+            "You need to run this command with administrator privileges.".to_string()
+        }
+        _ => format!(
             "Unable to symlink {:?} to {:?}: {}",
             release_dir,
             config.active_release_dir(),
             err
-        )
+        ),
     })?;
 
     config.save(config_file)?;
@@ -1247,4 +1285,36 @@ pub fn run(
             std::process::exit(0);
         }
     }
+}
+
+pub fn list(config_file: &str) -> Result<(), String> {
+    let config = Config::load(config_file)?;
+
+    let entries = fs::read_dir(&config.releases_dir).map_err(|err| {
+        format!(
+            "Failed to read install directory, \
+            double check that your configuration file is correct: {err}"
+        )
+    })?;
+
+    for entry in entries {
+        match entry {
+            Ok(entry) => {
+                let dir_name = entry.file_name();
+                let current_version =
+                    load_release_version(&config.active_release_dir().join("version.yml"))?.channel;
+
+                let current = if current_version.contains(dir_name.to_string_lossy().as_ref()) {
+                    " (current)"
+                } else {
+                    ""
+                };
+                println!("{}{}", dir_name.to_string_lossy(), current);
+            }
+            Err(err) => {
+                eprintln!("error listing installed versions: {err:?}");
+            }
+        };
+    }
+    Ok(())
 }

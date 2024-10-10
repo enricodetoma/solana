@@ -51,6 +51,22 @@ pub enum ClusterType {
 
 impl ClusterType {
     pub const STRINGS: [&'static str; 4] = ["development", "devnet", "testnet", "mainnet-beta"];
+
+    /// Get the known genesis hash for this ClusterType
+    pub fn get_genesis_hash(&self) -> Option<Hash> {
+        match self {
+            Self::MainnetBeta => {
+                Some(Hash::from_str("5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d").unwrap())
+            }
+            Self::Testnet => {
+                Some(Hash::from_str("4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY").unwrap())
+            }
+            Self::Devnet => {
+                Some(Hash::from_str("EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG").unwrap())
+            }
+            Self::Development => None,
+        }
+    }
 }
 
 impl FromStr for ClusterType {
@@ -257,7 +273,9 @@ impl fmt::Display for GenesisConfig {
              Native instruction processors: {:#?}\n\
              Rewards pool: {:#?}\n\
              ",
-            Utc.timestamp(self.creation_time, 0).to_rfc3339(),
+            Utc.timestamp_opt(self.creation_time, 0)
+                .unwrap()
+                .to_rfc3339(),
             self.cluster_type,
             self.hash(),
             compute_shred_version(&self.hash(), None),

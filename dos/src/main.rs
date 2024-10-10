@@ -38,19 +38,24 @@
 //! solana-dos $COMMON --valid-blockhash --transaction-type account-creation
 //! ```
 //!
-#![allow(clippy::integer_arithmetic)]
+#![allow(clippy::arithmetic_side_effects)]
+#![allow(deprecated)]
 use {
     crossbeam_channel::{select, tick, unbounded, Receiver, Sender},
     itertools::Itertools,
     log::*,
     rand::{thread_rng, Rng},
     solana_bench_tps::{bench::generate_and_fund_keypairs, bench_tps_client::BenchTpsClient},
-    solana_client::{connection_cache::ConnectionCache, tpu_connection::TpuConnection},
-    solana_core::serve_repair::{RepairProtocol, RepairRequestHeader, ServeRepair},
+    solana_client::{
+        connection_cache::ConnectionCache, tpu_client::TpuClientWrapper,
+        tpu_connection::TpuConnection,
+    },
+    solana_core::repair::serve_repair::{RepairProtocol, RepairRequestHeader, ServeRepair},
     solana_dos::cli::*,
     solana_gossip::{
-        contact_info::ContactInfo,
-        gossip_service::{discover, get_multi_client},
+        contact_info::Protocol,
+        gossip_service::{discover, get_client},
+        legacy_contact_info::LegacyContactInfo as ContactInfo,
     },
     solana_measure::measure::Measure,
     solana_rpc_client::rpc_client::RpcClient,
@@ -67,7 +72,7 @@ use {
         transaction::Transaction,
     },
     solana_streamer::socket::SocketAddrSpace,
-    solana_tpu_client::tpu_connection_cache::DEFAULT_TPU_CONNECTION_POOL_SIZE,
+    solana_tpu_client::tpu_client::DEFAULT_TPU_CONNECTION_POOL_SIZE,
     std::{
         net::{SocketAddr, UdpSocket},
         process::exit,
@@ -255,8 +260,13 @@ fn create_sender_thread(
 ) -> thread::JoinHandle<()> {
     // ConnectionCache is used instead of client because it gives ~6% higher pps
     let connection_cache = match tpu_use_quic {
-        true => ConnectionCache::new(DEFAULT_TPU_CONNECTION_POOL_SIZE),
-        false => ConnectionCache::with_udp(DEFAULT_TPU_CONNECTION_POOL_SIZE),
+        true => ConnectionCache::new_quic(
+            "connection_cache_dos_quic",
+            DEFAULT_TPU_CONNECTION_POOL_SIZE,
+        ),
+        false => {
+            ConnectionCache::with_udp("connection_cache_dos_udp", DEFAULT_TPU_CONNECTION_POOL_SIZE)
+        }
     };
     let connection = connection_cache.get_connection(target);
 
@@ -285,7 +295,7 @@ fn create_sender_thread(
                         Ok(tx_batch) => {
                             let len = tx_batch.batch.len();
                             let mut measure_send_txs = Measure::start("measure_send_txs");
-                            let res = connection.send_wire_transaction_batch_async(tx_batch.batch);
+                            let res = connection.send_data_batch_async(tx_batch.batch);
 
                             measure_send_txs.stop();
                             time_send_ns += measure_send_txs.as_ns();
@@ -337,7 +347,7 @@ fn create_sender_thread(
 fn create_generator_thread<T: 'static + BenchTpsClient + Send + Sync>(
     tx_sender: &Sender<TransactionBatchMsg>,
     send_batch_size: usize,
-    transaction_generator: &mut TransactionGenerator,
+    transaction_generator: &TransactionGenerator,
     client: Option<Arc<T>>,
     payer: Option<Keypair>,
 ) -> thread::JoinHandle<()> {
@@ -414,7 +424,13 @@ fn get_target(
     nodes: &[ContactInfo],
     mode: Mode,
     entrypoint_addr: SocketAddr,
+    tpu_use_quic: bool,
 ) -> Option<(Pubkey, SocketAddr)> {
+    let protocol = if tpu_use_quic {
+        Protocol::QUIC
+    } else {
+        Protocol::UDP
+    };
     let mut target = None;
     if nodes.is_empty() {
         // skip-gossip case
@@ -427,16 +443,19 @@ fn get_target(
         info!("ADDR = {}", entrypoint_addr);
 
         for node in nodes {
-            if node.gossip == entrypoint_addr {
-                info!("{}", node.gossip);
+            if node.gossip().ok() == Some(entrypoint_addr) {
+                info!("{:?}", node.gossip());
                 target = match mode {
-                    Mode::Gossip => Some((node.id, node.gossip)),
-                    Mode::Tvu => Some((node.id, node.tvu)),
-                    Mode::TvuForwards => Some((node.id, node.tvu_forwards)),
-                    Mode::Tpu => Some((node.id, node.tpu)),
-                    Mode::TpuForwards => Some((node.id, node.tpu_forwards)),
-                    Mode::Repair => Some((node.id, node.repair)),
-                    Mode::ServeRepair => Some((node.id, node.serve_repair)),
+                    Mode::Gossip => Some((*node.pubkey(), node.gossip().unwrap())),
+                    Mode::Tvu => Some((*node.pubkey(), node.tvu(Protocol::UDP).unwrap())),
+                    Mode::Tpu => Some((*node.pubkey(), node.tpu(protocol).unwrap())),
+                    Mode::TpuForwards => {
+                        Some((*node.pubkey(), node.tpu_forwards(protocol).unwrap()))
+                    }
+                    Mode::Repair => todo!("repair socket is not gossiped anymore!"),
+                    Mode::ServeRepair => {
+                        Some((*node.pubkey(), node.serve_repair(Protocol::UDP).unwrap()))
+                    }
                     Mode::Rpc => None,
                 };
                 break;
@@ -457,9 +476,9 @@ fn get_rpc_client(
 
     // find target node
     for node in nodes {
-        if node.gossip == entrypoint_addr {
-            info!("{}", node.gossip);
-            return Ok(RpcClient::new_socket(node.rpc));
+        if node.gossip().ok() == Some(entrypoint_addr) {
+            info!("{:?}", node.gossip());
+            return Ok(RpcClient::new_socket(node.rpc().unwrap()));
         }
     }
     Err("Node with entrypoint_addr was not found")
@@ -535,12 +554,18 @@ fn create_payers<T: 'static + BenchTpsClient + Send + Sync>(
         // transactions are built to be invalid so the the amount here is arbitrary
         let funding_key = Keypair::new();
         let funding_key = Arc::new(funding_key);
-        let res =
-            generate_and_fund_keypairs(client.unwrap().clone(), &funding_key, size, 1_000_000)
-                .unwrap_or_else(|e| {
-                    eprintln!("Error could not fund keys: {e:?}");
-                    exit(1);
-                });
+        let res = generate_and_fund_keypairs(
+            client.unwrap().clone(),
+            &funding_key,
+            size,
+            1_000_000,
+            false,
+            false,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Error could not fund keys: {e:?}");
+            exit(1);
+        });
         res.into_iter().map(Some).collect()
     } else {
         std::iter::repeat_with(|| None).take(size).collect()
@@ -574,7 +599,7 @@ fn run_dos_transactions<T: 'static + BenchTpsClient + Send + Sync>(
         client.as_ref(),
     );
 
-    let mut transaction_generator = TransactionGenerator::new(transaction_params);
+    let transaction_generator = TransactionGenerator::new(transaction_params);
     let (tx_sender, tx_receiver) = unbounded();
 
     let sender_thread = create_sender_thread(tx_receiver, iterations, &target, tpu_use_quic);
@@ -584,7 +609,7 @@ fn run_dos_transactions<T: 'static + BenchTpsClient + Send + Sync>(
             create_generator_thread(
                 &tx_sender,
                 send_batch_size,
-                &mut transaction_generator,
+                &transaction_generator,
                 client.clone(),
                 payer,
             )
@@ -606,8 +631,12 @@ fn run_dos<T: 'static + BenchTpsClient + Send + Sync>(
     client: Option<Arc<T>>,
     params: DosClientParameters,
 ) {
-    let target = get_target(nodes, params.mode, params.entrypoint_addr);
-
+    let target = get_target(
+        nodes,
+        params.mode,
+        params.entrypoint_addr,
+        params.tpu_use_quic,
+    );
     if params.mode == Mode::Rpc {
         // creating rpc_client because get_account, get_program_accounts are not implemented for BenchTpsClient
         let rpc_client =
@@ -742,7 +771,7 @@ fn main() {
             Some(&cmd_params.entrypoint_addr),
             None,                              // num_nodes
             Duration::from_secs(60),           // timeout
-            None,                              // find_node_by_pubkey
+            None,                              // find_nodes_by_pubkey
             Some(&cmd_params.entrypoint_addr), // find_node_by_gossip_addr
             None,                              // my_gossip_addr
             0,                                 // my_shred_version
@@ -757,38 +786,42 @@ fn main() {
         });
 
         let connection_cache = match cmd_params.tpu_use_quic {
-            true => ConnectionCache::new(DEFAULT_TPU_CONNECTION_POOL_SIZE),
-            false => ConnectionCache::with_udp(DEFAULT_TPU_CONNECTION_POOL_SIZE),
+            true => ConnectionCache::new_quic(
+                "connection_cache_dos_quic",
+                DEFAULT_TPU_CONNECTION_POOL_SIZE,
+            ),
+            false => ConnectionCache::with_udp(
+                "connection_cache_dos_udp",
+                DEFAULT_TPU_CONNECTION_POOL_SIZE,
+            ),
         };
-        let (client, num_clients) = get_multi_client(
-            &validators,
-            &SocketAddrSpace::Unspecified,
-            Arc::new(connection_cache),
-        );
-        if validators.len() < num_clients {
-            eprintln!(
-                "Error: Insufficient nodes discovered.  Expecting {} or more",
-                validators.len()
-            );
-            exit(1);
-        }
-        (gossip_nodes, Some(Arc::new(client)))
+        let client = get_client(&validators, Arc::new(connection_cache));
+        (gossip_nodes, Some(client))
     } else {
         (vec![], None)
     };
 
     info!("done found {} nodes", nodes.len());
-
-    run_dos(&nodes, 0, client, cmd_params);
+    if let Some(tpu_client) = client {
+        match tpu_client {
+            TpuClientWrapper::Quic(quic_client) => {
+                run_dos(&nodes, 0, Some(Arc::new(quic_client)), cmd_params);
+            }
+            TpuClientWrapper::Udp(udp_client) => {
+                run_dos(&nodes, 0, Some(Arc::new(udp_client)), cmd_params);
+            }
+        };
+    }
 }
 
 #[cfg(test)]
 pub mod test {
     use {
         super::*,
-        solana_client::thin_client::ThinClient,
+        solana_client::tpu_client::QuicTpuClient,
         solana_core::validator::ValidatorConfig,
         solana_faucet::faucet::run_local_faucet,
+        solana_gossip::contact_info::LegacyContactInfo,
         solana_local_cluster::{
             cluster::Cluster,
             local_cluster::{ClusterConfig, LocalCluster},
@@ -803,7 +836,7 @@ pub mod test {
     // thin wrapper for the run_dos function
     // to avoid specifying everywhere generic parameters
     fn run_dos_no_client(nodes: &[ContactInfo], iterations: usize, params: DosClientParameters) {
-        run_dos::<ThinClient>(nodes, iterations, None, params);
+        run_dos::<QuicTpuClient>(nodes, iterations, None, params);
     }
 
     #[test]
@@ -812,7 +845,7 @@ pub mod test {
             &solana_sdk::pubkey::new_rand(),
             timestamp(),
         )];
-        let entrypoint_addr = nodes[0].gossip;
+        let entrypoint_addr = nodes[0].gossip().unwrap();
 
         run_dos_no_client(
             &nodes,
@@ -832,6 +865,9 @@ pub mod test {
             },
         );
 
+        // TODO: Figure out how to DOS repair. Repair socket is no longer
+        // gossiped and cannot be obtained from a node's contact-info.
+        #[cfg(not(test))]
         run_dos_no_client(
             &nodes,
             1,
@@ -896,7 +932,11 @@ pub mod test {
         assert_eq!(cluster.validators.len(), num_nodes);
 
         let nodes = cluster.get_node_pubkeys();
-        let node = cluster.get_contact_info(&nodes[0]).unwrap().clone();
+        let node = cluster
+            .get_contact_info(&nodes[0])
+            .map(LegacyContactInfo::try_from)
+            .unwrap()
+            .unwrap();
         let nodes_slice = [node];
 
         // send random transactions to TPU
@@ -905,7 +945,7 @@ pub mod test {
             &nodes_slice,
             10,
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 1024,
                 data_type: DataType::Random,
@@ -929,14 +969,16 @@ pub mod test {
         assert_eq!(cluster.validators.len(), num_nodes);
 
         let nodes = cluster.get_node_pubkeys();
-        let node = cluster.get_contact_info(&nodes[0]).unwrap().clone();
+        let node = cluster
+            .get_contact_info(&nodes[0])
+            .map(LegacyContactInfo::try_from)
+            .unwrap()
+            .unwrap();
         let nodes_slice = [node];
 
-        let client = Arc::new(ThinClient::new(
-            cluster.entry_point_info.rpc,
-            cluster.entry_point_info.tpu,
-            cluster.connection_cache.clone(),
-        ));
+        let client = Arc::new(cluster.build_tpu_quic_client().unwrap_or_else(|err| {
+            panic!("Could not create TpuClient with Quic Cache {err:?}");
+        }));
 
         // creates one transaction with 8 valid signatures and sends it 10 times
         run_dos(
@@ -944,7 +986,7 @@ pub mod test {
             10,
             Some(client.clone()),
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 0, // irrelevant
                 data_type: DataType::Transaction,
@@ -971,7 +1013,7 @@ pub mod test {
             10,
             Some(client.clone()),
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 0, // irrelevant
                 data_type: DataType::Transaction,
@@ -998,7 +1040,7 @@ pub mod test {
             10,
             Some(client),
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 0, // irrelevant
                 data_type: DataType::Transaction,
@@ -1061,14 +1103,16 @@ pub mod test {
         cluster.transfer(&cluster.funding_keypair, &faucet_pubkey, 100_000_000);
 
         let nodes = cluster.get_node_pubkeys();
-        let node = cluster.get_contact_info(&nodes[0]).unwrap().clone();
+        let node = cluster
+            .get_contact_info(&nodes[0])
+            .map(LegacyContactInfo::try_from)
+            .unwrap()
+            .unwrap();
         let nodes_slice = [node];
 
-        let client = Arc::new(ThinClient::new(
-            cluster.entry_point_info.rpc,
-            cluster.entry_point_info.tpu,
-            cluster.connection_cache.clone(),
-        ));
+        let client = Arc::new(cluster.build_tpu_quic_client().unwrap_or_else(|err| {
+            panic!("Could not create TpuClient with Quic Cache {err:?}");
+        }));
 
         // creates one transaction and sends it 10 times
         // this is done in single thread
@@ -1077,7 +1121,7 @@ pub mod test {
             10,
             Some(client.clone()),
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 0, // irrelevant if not random
                 data_type: DataType::Transaction,
@@ -1106,7 +1150,7 @@ pub mod test {
             10,
             Some(client.clone()),
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 0, // irrelevant if not random
                 data_type: DataType::Transaction,
@@ -1134,7 +1178,7 @@ pub mod test {
             10,
             Some(client.clone()),
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 0, // irrelevant if not random
                 data_type: DataType::Transaction,
@@ -1162,7 +1206,7 @@ pub mod test {
             10,
             Some(client),
             DosClientParameters {
-                entrypoint_addr: cluster.entry_point_info.gossip,
+                entrypoint_addr: cluster.entry_point_info.gossip().unwrap(),
                 mode: Mode::Tpu,
                 data_size: 0, // irrelevant if not random
                 data_type: DataType::Transaction,

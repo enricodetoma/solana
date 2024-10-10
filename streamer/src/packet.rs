@@ -4,8 +4,11 @@ use {
         recvmmsg::{recv_mmsg, NUM_RCVMMSGS},
         socket::SocketAddrSpace,
     },
-    solana_metrics::inc_new_counter_debug,
-    std::{io::Result, net::UdpSocket, time::Instant},
+    std::{
+        io::Result,
+        net::UdpSocket,
+        time::{Duration, Instant},
+    },
 };
 pub use {
     solana_perf::packet::{
@@ -14,7 +17,7 @@ pub use {
     solana_sdk::packet::{Meta, Packet, PACKET_DATA_SIZE},
 };
 
-pub fn recv_from(batch: &mut PacketBatch, socket: &UdpSocket, max_wait_ms: u64) -> Result<usize> {
+pub fn recv_from(batch: &mut PacketBatch, socket: &UdpSocket, max_wait: Duration) -> Result<usize> {
     let mut i = 0;
     //DOCUMENTED SIDE-EFFECT
     //Performance out of the IO without poll
@@ -32,7 +35,7 @@ pub fn recv_from(batch: &mut PacketBatch, socket: &UdpSocket, max_wait_ms: u64) 
         );
         match recv_mmsg(socket, &mut batch[i..]) {
             Err(_) if i > 0 => {
-                if start.elapsed().as_millis() as u64 > max_wait_ms {
+                if start.elapsed() > max_wait {
                     break;
                 }
             }
@@ -48,14 +51,13 @@ pub fn recv_from(batch: &mut PacketBatch, socket: &UdpSocket, max_wait_ms: u64) 
                 i += npkts;
                 // Try to batch into big enough buffers
                 // will cause less re-shuffling later on.
-                if start.elapsed().as_millis() as u64 > max_wait_ms || i >= PACKETS_PER_BATCH {
+                if start.elapsed() > max_wait || i >= PACKETS_PER_BATCH {
                     break;
                 }
             }
         }
     }
     batch.truncate(i);
-    inc_new_counter_debug!("packets-recv_count", i);
     Ok(i)
 }
 
@@ -117,8 +119,12 @@ mod tests {
         batch
             .iter_mut()
             .for_each(|pkt| *pkt.meta_mut() = Meta::default());
-        let recvd = recv_from(&mut batch, &recv_socket, 1).unwrap();
-
+        let recvd = recv_from(
+            &mut batch,
+            &recv_socket,
+            Duration::from_millis(1), // max_wait
+        )
+        .unwrap();
         assert_eq!(recvd, batch.len());
 
         for m in batch.iter() {
@@ -171,9 +177,12 @@ mod tests {
             }
             send_to(&batch, &send_socket, &SocketAddrSpace::Unspecified).unwrap();
         }
-
-        let recvd = recv_from(&mut batch, &recv_socket, 100).unwrap();
-
+        let recvd = recv_from(
+            &mut batch,
+            &recv_socket,
+            Duration::from_millis(100), // max_wait
+        )
+        .unwrap();
         // Check we only got PACKETS_PER_BATCH packets
         assert_eq!(recvd, PACKETS_PER_BATCH);
         assert_eq!(batch.capacity(), PACKETS_PER_BATCH);

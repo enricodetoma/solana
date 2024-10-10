@@ -1,7 +1,8 @@
 use {
-    crate::{stakes::StakesEnum, vote_account::VoteAccountsHashMap},
+    crate::stakes::StakesEnum,
     serde::{Deserialize, Serialize},
     solana_sdk::{clock::Epoch, pubkey::Pubkey},
+    solana_vote::vote_account::VoteAccountsHashMap,
     std::{collections::HashMap, sync::Arc},
 };
 
@@ -42,6 +43,11 @@ impl EpochStakes {
 
     pub fn total_stake(&self) -> u64 {
         self.total_stake
+    }
+
+    /// For tests
+    pub fn set_total_stake(&mut self, total_stake: u64) {
+        self.total_stake = total_stake;
     }
 
     pub fn node_id_to_vote_accounts(&self) -> &Arc<NodeIdToVoteAccounts> {
@@ -118,7 +124,7 @@ impl EpochStakes {
 #[cfg(test)]
 pub(crate) mod tests {
     use {
-        super::*, crate::vote_account::VoteAccount, solana_sdk::account::AccountSharedData,
+        super::*, solana_sdk::account::AccountSharedData, solana_vote::vote_account::VoteAccount,
         solana_vote_program::vote_state::create_account_with_authorized, std::iter,
     };
 

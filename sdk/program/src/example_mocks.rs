@@ -44,7 +44,7 @@ pub mod solana_rpc_client {
                 &self,
                 _transaction: &Transaction,
             ) -> ClientResult<Signature> {
-                Ok(Signature::default())
+                Ok(Signature)
             }
 
             pub fn get_minimum_balance_for_rent_exemption(
@@ -113,7 +113,7 @@ pub mod solana_rpc_client_nonce_utils {
 /// programs.
 pub mod solana_sdk {
     pub use crate::{
-        address_lookup_table_account, hash, instruction, keccak, message, nonce,
+        hash, instruction, keccak, message, nonce,
         pubkey::{self, Pubkey},
         system_instruction, system_program,
         sysvar::{
@@ -213,7 +213,7 @@ pub mod solana_sdk {
         }
 
         impl VersionedTransaction {
-            pub fn try_new<T: Signers>(
+            pub fn try_new<T: Signers + ?Sized>(
                 message: VersionedMessage,
                 _keypairs: &T,
             ) -> std::result::Result<Self, SignerError> {
@@ -230,7 +230,7 @@ pub mod solana_sdk {
         }
 
         impl Transaction {
-            pub fn new<T: Signers>(
+            pub fn new<T: Signers + ?Sized>(
                 _from_keypairs: &T,
                 _message: Message,
                 _recent_blockhash: Hash,
@@ -252,7 +252,7 @@ pub mod solana_sdk {
                 }
             }
 
-            pub fn new_signed_with_payer<T: Signers>(
+            pub fn new_signed_with_payer<T: Signers + ?Sized>(
                 instructions: &[Instruction],
                 payer: Option<&Pubkey>,
                 signing_keypairs: &T,
@@ -262,9 +262,9 @@ pub mod solana_sdk {
                 Self::new(signing_keypairs, message, recent_blockhash)
             }
 
-            pub fn sign<T: Signers>(&mut self, _keypairs: &T, _recent_blockhash: Hash) {}
+            pub fn sign<T: Signers + ?Sized>(&mut self, _keypairs: &T, _recent_blockhash: Hash) {}
 
-            pub fn try_sign<T: Signers>(
+            pub fn try_sign<T: Signers + ?Sized>(
                 &mut self,
                 _keypairs: &T,
                 _recent_blockhash: Hash,
@@ -273,10 +273,20 @@ pub mod solana_sdk {
             }
         }
     }
+
+    #[deprecated(
+        since = "1.17.0",
+        note = "Please use `solana_sdk::address_lookup_table` instead"
+    )]
+    pub use crate::address_lookup_table as address_lookup_table_account;
 }
 
+#[deprecated(
+    since = "1.17.0",
+    note = "Please use `solana_sdk::address_lookup_table` instead"
+)]
 pub mod solana_address_lookup_table_program {
-    crate::declare_id!("AddressLookupTab1e1111111111111111111111111");
+    pub use crate::address_lookup_table::program::{check_id, id, ID};
 
     pub mod state {
         use {

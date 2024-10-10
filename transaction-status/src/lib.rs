@@ -1,4 +1,4 @@
-#![allow(clippy::integer_arithmetic)]
+#![allow(clippy::arithmetic_side_effects)]
 
 pub use {crate::extract_memos::extract_and_fmt_memos, solana_sdk::reward_type::RewardType};
 use {
@@ -7,10 +7,12 @@ use {
         parse_accounts::{parse_legacy_message_accounts, parse_v0_message_accounts, ParsedAccount},
         parse_instruction::{parse, ParsedInstruction},
     },
+    base64::{prelude::BASE64_STANDARD, Engine},
     solana_account_decoder::parse_token::UiTokenAmount,
     solana_sdk::{
         clock::{Slot, UnixTimestamp},
         commitment_config::CommitmentConfig,
+        hash::Hash,
         instruction::CompiledInstruction,
         message::{
             v0::{self, LoadedAddresses, LoadedMessage, MessageAddressTableLookup},
@@ -228,6 +230,27 @@ pub struct InnerInstruction {
     pub stack_height: Option<u32>,
 }
 
+/// Maps a list of inner instructions from `solana_sdk` into a list of this
+/// crate's representation of inner instructions (with instruction indices).
+pub fn map_inner_instructions(
+    inner_instructions: solana_sdk::inner_instruction::InnerInstructionsList,
+) -> impl Iterator<Item = InnerInstructions> {
+    inner_instructions
+        .into_iter()
+        .enumerate()
+        .map(|(index, instructions)| InnerInstructions {
+            index: index as u8,
+            instructions: instructions
+                .into_iter()
+                .map(|info| InnerInstruction {
+                    stack_height: Some(u32::from(info.stack_height)),
+                    instruction: info.instruction,
+                })
+                .collect(),
+        })
+        .filter(|i| !i.instructions.is_empty())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UiInnerInstructions {
@@ -238,7 +261,7 @@ pub struct UiInnerInstructions {
 }
 
 impl UiInnerInstructions {
-    fn parse(inner_instructions: InnerInstructions, account_keys: &AccountKeys) -> Self {
+    pub fn parse(inner_instructions: InnerInstructions, account_keys: &AccountKeys) -> Self {
         Self {
             index: inner_instructions.index,
             instructions: inner_instructions
@@ -604,6 +627,12 @@ pub struct Reward {
 
 pub type Rewards = Vec<Reward>;
 
+#[derive(Debug, Error)]
+pub enum ConvertBlockError {
+    #[error("transactions missing after converted, before: {0}, after: {1}")]
+    TransactionsMissing(usize, usize),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConfirmedBlock {
     pub previous_blockhash: String,
@@ -643,6 +672,40 @@ impl From<VersionedConfirmedBlock> for ConfirmedBlock {
             block_time: block.block_time,
             block_height: block.block_height,
         }
+    }
+}
+
+impl TryFrom<ConfirmedBlock> for VersionedConfirmedBlock {
+    type Error = ConvertBlockError;
+
+    fn try_from(block: ConfirmedBlock) -> Result<Self, Self::Error> {
+        let expected_transaction_count = block.transactions.len();
+
+        let txs: Vec<_> = block
+            .transactions
+            .into_iter()
+            .filter_map(|tx| match tx {
+                TransactionWithStatusMeta::MissingMetadata(_) => None,
+                TransactionWithStatusMeta::Complete(tx) => Some(tx),
+            })
+            .collect();
+
+        if txs.len() != expected_transaction_count {
+            return Err(ConvertBlockError::TransactionsMissing(
+                expected_transaction_count,
+                txs.len(),
+            ));
+        }
+
+        Ok(Self {
+            previous_blockhash: block.previous_blockhash,
+            blockhash: block.blockhash,
+            parent_slot: block.parent_slot,
+            transactions: txs,
+            rewards: block.rewards,
+            block_time: block.block_time,
+            block_height: block.block_height,
+        })
     }
 }
 
@@ -750,6 +813,23 @@ pub struct UiConfirmedBlock {
     pub rewards: Option<Rewards>,
     pub block_time: Option<UnixTimestamp>,
     pub block_height: Option<u64>,
+}
+
+// Confirmed block with type guarantees that transaction metadata is always
+// present, as well as a list of the entry data needed to cryptographically
+// verify the block. Used for uploading to BigTable.
+pub struct VersionedConfirmedBlockWithEntries {
+    pub block: VersionedConfirmedBlock,
+    pub entries: Vec<EntrySummary>,
+}
+
+// Data needed to reconstruct an Entry, given an ordered list of transactions in
+// a block. Used for uploading to BigTable.
+pub struct EntrySummary {
+    pub num_hashes: u64,
+    pub hash: Hash,
+    pub num_transactions: u64,
+    pub starting_transaction_index: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1008,7 +1088,7 @@ impl EncodableWithMeta for VersionedTransaction {
                 TransactionBinaryEncoding::Base58,
             ),
             UiTransactionEncoding::Base64 => EncodedTransaction::Binary(
-                base64::encode(bincode::serialize(self).unwrap()),
+                BASE64_STANDARD.encode(bincode::serialize(self).unwrap()),
                 TransactionBinaryEncoding::Base64,
             ),
             UiTransactionEncoding::Json => self.json_encode(),
@@ -1048,7 +1128,7 @@ impl Encodable for Transaction {
                 TransactionBinaryEncoding::Base58,
             ),
             UiTransactionEncoding::Base64 => EncodedTransaction::Binary(
-                base64::encode(bincode::serialize(self).unwrap()),
+                BASE64_STANDARD.encode(bincode::serialize(self).unwrap()),
                 TransactionBinaryEncoding::Base64,
             ),
             UiTransactionEncoding::Json | UiTransactionEncoding::JsonParsed => {
@@ -1084,18 +1164,13 @@ impl EncodedTransaction {
                 .into_vec()
                 .ok()
                 .and_then(|bytes| bincode::deserialize(&bytes).ok()),
-            TransactionBinaryEncoding::Base64 => base64::decode(blob)
+            TransactionBinaryEncoding::Base64 => BASE64_STANDARD
+                .decode(blob)
                 .ok()
                 .and_then(|bytes| bincode::deserialize(&bytes).ok()),
         };
 
-        transaction.filter(|transaction| {
-            transaction
-                .sanitize(
-                    true, // require_static_program_ids
-                )
-                .is_ok()
-        })
+        transaction.filter(|transaction| transaction.sanitize().is_ok())
     }
 }
 
@@ -1233,6 +1308,7 @@ pub struct UiParsedMessage {
     pub account_keys: Vec<ParsedAccount>,
     pub recent_blockhash: String,
     pub instructions: Vec<UiInstruction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address_table_lookups: Option<Vec<UiAddressTableLookup>>,
 }
 
@@ -1268,7 +1344,7 @@ impl From<TransactionReturnData> for UiTransactionReturnData {
         Self {
             program_id: return_data.program_id.to_string(),
             data: (
-                base64::encode(return_data.data),
+                BASE64_STANDARD.encode(return_data.data),
                 UiReturnDataEncoding::Base64,
             ),
         }

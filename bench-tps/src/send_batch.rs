@@ -6,6 +6,7 @@ use {
     solana_measure::measure::Measure,
     solana_sdk::{
         commitment_config::CommitmentConfig,
+        compute_budget::ComputeBudgetInstruction,
         hash::Hash,
         message::Message,
         nonce::State,
@@ -29,8 +30,8 @@ use {
 
 pub fn get_latest_blockhash<T: BenchTpsClient + ?Sized>(client: &T) -> Hash {
     loop {
-        match client.get_latest_blockhash_with_commitment(CommitmentConfig::processed()) {
-            Ok((blockhash, _)) => return blockhash,
+        match client.get_latest_blockhash() {
+            Ok(blockhash) => return blockhash,
             Err(err) => {
                 info!("Couldn't get last blockhash: {:?}", err);
                 sleep(Duration::from_secs(1));
@@ -65,6 +66,7 @@ pub fn fund_keys<T: 'static + BenchTpsClient + Send + Sync + ?Sized>(
     total: u64,
     max_fee: u64,
     lamports_per_account: u64,
+    data_size_limit: Option<u32>,
 ) {
     let mut funded: Vec<&Keypair> = vec![source];
     let mut funded_funds = total;
@@ -87,6 +89,7 @@ pub fn fund_keys<T: 'static + BenchTpsClient + Send + Sync + ?Sized>(
                 &client,
                 chunk,
                 to_lamports,
+                data_size_limit,
             );
         });
 
@@ -245,9 +248,13 @@ where
     fn send<C: BenchTpsClient + ?Sized>(&self, client: &Arc<C>) {
         let mut send_txs = Measure::start("send_and_clone_txs");
         let batch: Vec<_> = self.iter().map(|(_keypair, tx)| tx.clone()).collect();
-        client.send_batch(batch).expect("transfer");
+        let result = client.send_batch(batch);
         send_txs.stop();
-        debug!("send {} {}", self.len(), send_txs);
+        if result.is_err() {
+            debug!("Failed to send batch {result:?}");
+        } else {
+            debug!("send {} {}", self.len(), send_txs);
+        }
     }
 
     fn verify<C: 'static + BenchTpsClient + Send + Sync + ?Sized>(
@@ -347,6 +354,7 @@ trait FundingTransactions<'a>: SendBatchTransactions<'a, FundingSigners<'a>> {
         client: &Arc<T>,
         to_fund: &FundingChunk<'a>,
         to_lamports: u64,
+        data_size_limit: Option<u32>,
     );
 }
 
@@ -356,9 +364,15 @@ impl<'a> FundingTransactions<'a> for FundingContainer<'a> {
         client: &Arc<T>,
         to_fund: &FundingChunk<'a>,
         to_lamports: u64,
+        data_size_limit: Option<u32>,
     ) {
         self.make(to_fund, |(k, t)| -> (FundingSigners<'a>, Transaction) {
-            let instructions = system_instruction::transfer_many(&k.pubkey(), t);
+            let mut instructions = system_instruction::transfer_many(&k.pubkey(), t);
+            if let Some(data_size_limit) = data_size_limit {
+                instructions.push(
+                    ComputeBudgetInstruction::set_loaded_accounts_data_size_limit(data_size_limit),
+                );
+            }
             let message = Message::new(&instructions, Some(&k.pubkey()));
             (*k, Transaction::new_unsigned(message))
         });

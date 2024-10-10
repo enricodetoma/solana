@@ -107,9 +107,6 @@ cat >> ~/solana/on-reboot <<EOF
   PATH="$HOME"/.cargo/bin:"$PATH"
   export USE_INSTALL=1
 
-  sudo RUST_LOG=info ~solana/.cargo/bin/solana-sys-tuner --user $(whoami) > sys-tuner.log 2>&1 &
-  echo \$! > sys-tuner.pid
-
   (
     sudo SOLANA_METRICS_CONFIG="$SOLANA_METRICS_CONFIG" scripts/oom-monitor.sh
   ) > oom-monitor.log 2>&1 &
@@ -266,8 +263,9 @@ EOF
       solana-ledger-tool -l config/bootstrap-validator shred-version --max-genesis-archive-unpacked-size 1073741824 | tee config/shred-version
 
       if [[ -n "$maybeWaitForSupermajority" ]]; then
-        bankHash=$(solana-ledger-tool -l config/bootstrap-validator bank-hash)
-        extraNodeArgs="$extraNodeArgs --expected-bank-hash $bankHash"
+        bankHash=$(solana-ledger-tool -l config/bootstrap-validator bank-hash --halt-at-slot 0)
+        shredVersion="$(cat "$SOLANA_CONFIG_DIR"/shred-version)"
+        extraNodeArgs="$extraNodeArgs --expected-bank-hash $bankHash --expected-shred-version $shredVersion"
         echo "$bankHash" > config/bank-hash
       fi
     fi

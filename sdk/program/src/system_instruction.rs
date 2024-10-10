@@ -4,7 +4,7 @@
 //! accounts][na]. It is responsible for transferring lamports from accounts
 //! owned by the system program, including typical user wallet accounts.
 //!
-//! [na]: https://docs.solana.com/implemented-proposals/durable-tx-nonces
+//! [na]: https://docs.solanalabs.com/implemented-proposals/durable-tx-nonces
 //!
 //! Account creation typically involves three steps: [`allocate`] space,
 //! [`transfer`] lamports for rent, [`assign`] to its owning program. The
@@ -12,7 +12,7 @@
 //! contain enough lamports to be [rent exempt], or else the creation
 //! instruction will fail.
 //!
-//! [rent exempt]: https://docs.solana.com/developing/programming-model/accounts#rent-exemption
+//! [rent exempt]: https://solana.com/docs/core/accounts#rent-exemption
 //!
 //! The accounts created by the system program can either be user-controlled,
 //! where the secret keys are held outside the blockchain,
@@ -43,7 +43,7 @@
 use {
     crate::{
         decode_error::DecodeError,
-        instruction::{AccountMeta, Instruction, InstructionError},
+        instruction::{AccountMeta, Instruction},
         nonce,
         pubkey::Pubkey,
         system_program,
@@ -78,101 +78,6 @@ pub enum SystemError {
 impl<T> DecodeError<T> for SystemError {
     fn type_of() -> &'static str {
         "SystemError"
-    }
-}
-
-#[derive(Error, Debug, Clone, PartialEq, Eq, FromPrimitive, ToPrimitive)]
-pub enum NonceError {
-    #[error("recent blockhash list is empty")]
-    NoRecentBlockhashes,
-    #[error("stored nonce is still in recent_blockhashes")]
-    NotExpired,
-    #[error("specified nonce does not match stored nonce")]
-    UnexpectedValue,
-    #[error("cannot handle request in current account state")]
-    BadAccountState,
-}
-
-impl<E> DecodeError<E> for NonceError {
-    fn type_of() -> &'static str {
-        "NonceError"
-    }
-}
-
-#[derive(Error, Debug, Clone, PartialEq, Eq, FromPrimitive, ToPrimitive)]
-enum NonceErrorAdapter {
-    #[error("recent blockhash list is empty")]
-    NoRecentBlockhashes,
-    #[error("stored nonce is still in recent_blockhashes")]
-    NotExpired,
-    #[error("specified nonce does not match stored nonce")]
-    UnexpectedValue,
-    #[error("cannot handle request in current account state")]
-    BadAccountState,
-}
-
-impl<E> DecodeError<E> for NonceErrorAdapter {
-    fn type_of() -> &'static str {
-        "NonceErrorAdapter"
-    }
-}
-
-impl From<NonceErrorAdapter> for NonceError {
-    fn from(e: NonceErrorAdapter) -> Self {
-        match e {
-            NonceErrorAdapter::NoRecentBlockhashes => NonceError::NoRecentBlockhashes,
-            NonceErrorAdapter::NotExpired => NonceError::NotExpired,
-            NonceErrorAdapter::UnexpectedValue => NonceError::UnexpectedValue,
-            NonceErrorAdapter::BadAccountState => NonceError::BadAccountState,
-        }
-    }
-}
-
-pub fn nonce_to_instruction_error(error: NonceError, use_system_variant: bool) -> InstructionError {
-    if use_system_variant {
-        match error {
-            NonceError::NoRecentBlockhashes => SystemError::NonceNoRecentBlockhashes.into(),
-            NonceError::NotExpired => SystemError::NonceBlockhashNotExpired.into(),
-            NonceError::UnexpectedValue => SystemError::NonceUnexpectedBlockhashValue.into(),
-            NonceError::BadAccountState => InstructionError::InvalidAccountData,
-        }
-    } else {
-        match error {
-            NonceError::NoRecentBlockhashes => NonceErrorAdapter::NoRecentBlockhashes.into(),
-            NonceError::NotExpired => NonceErrorAdapter::NotExpired.into(),
-            NonceError::UnexpectedValue => NonceErrorAdapter::UnexpectedValue.into(),
-            NonceError::BadAccountState => NonceErrorAdapter::BadAccountState.into(),
-        }
-    }
-}
-
-pub fn instruction_to_nonce_error(
-    error: &InstructionError,
-    use_system_variant: bool,
-) -> Option<NonceError> {
-    if use_system_variant {
-        match error {
-            InstructionError::Custom(discriminant) => {
-                match SystemError::decode_custom_error_to_enum(*discriminant) {
-                    Some(SystemError::NonceNoRecentBlockhashes) => {
-                        Some(NonceError::NoRecentBlockhashes)
-                    }
-                    Some(SystemError::NonceBlockhashNotExpired) => Some(NonceError::NotExpired),
-                    Some(SystemError::NonceUnexpectedBlockhashValue) => {
-                        Some(NonceError::UnexpectedValue)
-                    }
-                    _ => None,
-                }
-            }
-            InstructionError::InvalidAccountData => Some(NonceError::BadAccountState),
-            _ => None,
-        }
-    } else if let InstructionError::Custom(discriminant) = error {
-        let maybe: Option<NonceErrorAdapter> =
-            NonceErrorAdapter::decode_custom_error_to_enum(*discriminant);
-        maybe.map(NonceError::from)
-    } else {
-        None
     }
 }
 
@@ -458,9 +363,7 @@ pub enum SystemInstruction {
 /// [`invoke_signed`]: crate::program::invoke_signed
 ///
 /// ```
-/// # use borsh_derive::BorshDeserialize;
-/// # use borsh::BorshSerialize;
-/// # use borsh::de::BorshDeserialize;
+/// # use borsh::{BorshDeserialize, BorshSerialize};
 /// use solana_program::{
 ///     account_info::{next_account_info, AccountInfo},
 ///     entrypoint,
@@ -475,6 +378,7 @@ pub enum SystemInstruction {
 /// };
 ///
 /// #[derive(BorshSerialize, BorshDeserialize, Debug)]
+/// # #[borsh(crate = "borsh")]
 /// pub struct CreateAccountInstruction {
 ///     /// The PDA seed used to distinguish the new account from other PDAs
 ///     pub new_account_seed: [u8; 16],
@@ -676,9 +580,7 @@ pub fn create_account_with_seed(
 /// [`invoke_signed`]: crate::program::invoke_signed
 ///
 /// ```
-/// # use borsh_derive::BorshDeserialize;
-/// # use borsh::BorshSerialize;
-/// # use borsh::de::BorshDeserialize;
+/// # use borsh::{BorshDeserialize, BorshSerialize};
 /// use solana_program::{
 ///     account_info::{next_account_info, AccountInfo},
 ///     entrypoint,
@@ -693,6 +595,7 @@ pub fn create_account_with_seed(
 /// };
 ///
 /// #[derive(BorshSerialize, BorshDeserialize, Debug)]
+/// # #[borsh(crate = "borsh")]
 /// pub struct CreateAccountInstruction {
 ///     /// The PDA seed used to distinguish the new account from other PDAs
 ///     pub new_account_seed: [u8; 16],
@@ -888,9 +791,7 @@ pub fn assign_with_seed(
 /// [`invoke_signed`]: crate::program::invoke_signed
 ///
 /// ```
-/// # use borsh_derive::BorshDeserialize;
-/// # use borsh::BorshSerialize;
-/// # use borsh::de::BorshDeserialize;
+/// # use borsh::{BorshDeserialize, BorshSerialize};
 /// use solana_program::{
 ///     account_info::{next_account_info, AccountInfo},
 ///     entrypoint,
@@ -905,6 +806,7 @@ pub fn assign_with_seed(
 /// };
 ///
 /// #[derive(BorshSerialize, BorshDeserialize, Debug)]
+/// # #[borsh(crate = "borsh")]
 /// pub struct CreateAccountInstruction {
 ///     /// The PDA seed used to distinguish the new account from other PDAs
 ///     pub new_account_seed: [u8; 16],
@@ -1109,9 +1011,7 @@ pub fn transfer_with_seed(
 /// [`invoke_signed`]: crate::program::invoke_signed
 ///
 /// ```
-/// # use borsh_derive::BorshDeserialize;
-/// # use borsh::BorshSerialize;
-/// # use borsh::de::BorshDeserialize;
+/// # use borsh::{BorshDeserialize, BorshSerialize};
 /// use solana_program::{
 ///     account_info::{next_account_info, AccountInfo},
 ///     entrypoint,
@@ -1126,6 +1026,7 @@ pub fn transfer_with_seed(
 /// };
 ///
 /// #[derive(BorshSerialize, BorshDeserialize, Debug)]
+/// # #[borsh(crate = "borsh")]
 /// pub struct CreateAccountInstruction {
 ///     /// The PDA seed used to distinguish the new account from other PDAs
 ///     pub new_account_seed: [u8; 16],
@@ -1305,9 +1206,7 @@ pub fn allocate_with_seed(
 /// [`invoke_signed`]: crate::program::invoke_signed
 ///
 /// ```
-/// # use borsh_derive::BorshDeserialize;
-/// # use borsh::BorshSerialize;
-/// # use borsh::de::BorshDeserialize;
+/// # use borsh::{BorshDeserialize, BorshSerialize};
 /// use solana_program::{
 ///     account_info::{next_account_info, next_account_infos, AccountInfo},
 ///     entrypoint,
@@ -1325,6 +1224,7 @@ pub fn allocate_with_seed(
 /// /// - 1: system_program - executable
 /// /// - *: to - writable
 /// #[derive(BorshSerialize, BorshDeserialize, Debug)]
+/// # #[borsh(crate = "borsh")]
 /// pub struct TransferLamportsToManyInstruction {
 ///     pub bank_pda_bump_seed: u8,
 ///     pub amount_list: Vec<u64>,
@@ -1430,7 +1330,7 @@ pub fn create_nonce_account_with_seed(
 /// Consequently, it is not possible to sign a transaction, wait more than two
 /// minutes, then successfully execute that transaction.
 ///
-/// [dtn]: https://docs.solana.com/implemented-proposals/durable-tx-nonces
+/// [dtn]: https://docs.solanalabs.com/implemented-proposals/durable-tx-nonces
 /// [rbh]: crate::message::Message::recent_blockhash
 /// [nonce]: https://en.wikipedia.org/wiki/Cryptographic_nonce
 ///
@@ -1566,7 +1466,7 @@ pub fn create_nonce_account(
 ///
 /// When constructing a transaction that includes an `AdvanceNonceInstruction`
 /// the [`recent_blockhash`] must be treated differently &mdash; instead of
-/// setting it to a recent blockhash, the value of the nonce must be retreived
+/// setting it to a recent blockhash, the value of the nonce must be retrieved
 /// and deserialized from the nonce account, and that value specified as the
 /// "recent blockhash". A nonce account can be deserialized with the
 /// [`solana_rpc_client_nonce_utils::data_from_account`][dfa] function.
@@ -1701,7 +1601,7 @@ pub fn advance_nonce_account(nonce_pubkey: &Pubkey, authorized_pubkey: &Pubkey) 
 /// would leave the nonce account with a balance less than required for rent
 /// exemption, but also greater than zero, then the transaction will fail.
 ///
-/// [rent exemption]: https://docs.solana.com/developing/programming-model/accounts#rent-exemption
+/// [rent exemption]: https://solana.com/docs/core/accounts#rent-exemption
 ///
 /// This constructor creates a [`SystemInstruction::WithdrawNonceAccount`]
 /// instruction.
@@ -1867,11 +1767,7 @@ pub fn upgrade_nonce_account(nonce_pubkey: Pubkey) -> Instruction {
 
 #[cfg(test)]
 mod tests {
-    use {
-        super::*,
-        crate::instruction::{Instruction, InstructionError},
-        num_traits::ToPrimitive,
-    };
+    use {super::*, crate::instruction::Instruction};
 
     fn get_keys(instruction: &Instruction) -> Vec<Pubkey> {
         instruction.accounts.iter().map(|x| x.pubkey).collect()
@@ -1902,166 +1798,5 @@ mod tests {
         let pubkeys: Vec<_> = ix.accounts.iter().map(|am| am.pubkey).collect();
         assert!(pubkeys.contains(&from_pubkey));
         assert!(pubkeys.contains(&nonce_pubkey));
-    }
-
-    #[test]
-    fn test_nonce_error_decode() {
-        use num_traits::FromPrimitive;
-        fn pretty_err<T>(err: InstructionError) -> String
-        where
-            T: 'static + std::error::Error + DecodeError<T> + FromPrimitive,
-        {
-            if let InstructionError::Custom(code) = err {
-                let specific_error: T = T::decode_custom_error_to_enum(code).unwrap();
-                format!(
-                    "{:?}: {}::{:?} - {}",
-                    err,
-                    T::type_of(),
-                    specific_error,
-                    specific_error,
-                )
-            } else {
-                "".to_string()
-            }
-        }
-        assert_eq!(
-            "Custom(0): NonceError::NoRecentBlockhashes - recent blockhash list is empty",
-            pretty_err::<NonceError>(NonceError::NoRecentBlockhashes.into())
-        );
-        assert_eq!(
-            "Custom(1): NonceError::NotExpired - stored nonce is still in recent_blockhashes",
-            pretty_err::<NonceError>(NonceError::NotExpired.into())
-        );
-        assert_eq!(
-            "Custom(2): NonceError::UnexpectedValue - specified nonce does not match stored nonce",
-            pretty_err::<NonceError>(NonceError::UnexpectedValue.into())
-        );
-        assert_eq!(
-            "Custom(3): NonceError::BadAccountState - cannot handle request in current account state",
-            pretty_err::<NonceError>(NonceError::BadAccountState.into())
-        );
-    }
-
-    #[test]
-    fn test_nonce_to_instruction_error() {
-        assert_eq!(
-            nonce_to_instruction_error(NonceError::NoRecentBlockhashes, false),
-            NonceError::NoRecentBlockhashes.into(),
-        );
-        assert_eq!(
-            nonce_to_instruction_error(NonceError::NotExpired, false),
-            NonceError::NotExpired.into(),
-        );
-        assert_eq!(
-            nonce_to_instruction_error(NonceError::UnexpectedValue, false),
-            NonceError::UnexpectedValue.into(),
-        );
-        assert_eq!(
-            nonce_to_instruction_error(NonceError::BadAccountState, false),
-            NonceError::BadAccountState.into(),
-        );
-        assert_eq!(
-            nonce_to_instruction_error(NonceError::NoRecentBlockhashes, true),
-            SystemError::NonceNoRecentBlockhashes.into(),
-        );
-        assert_eq!(
-            nonce_to_instruction_error(NonceError::NotExpired, true),
-            SystemError::NonceBlockhashNotExpired.into(),
-        );
-        assert_eq!(
-            nonce_to_instruction_error(NonceError::UnexpectedValue, true),
-            SystemError::NonceUnexpectedBlockhashValue.into(),
-        );
-        assert_eq!(
-            nonce_to_instruction_error(NonceError::BadAccountState, true),
-            InstructionError::InvalidAccountData,
-        );
-    }
-
-    #[test]
-    fn test_instruction_to_nonce_error() {
-        assert_eq!(
-            instruction_to_nonce_error(
-                &InstructionError::Custom(NonceErrorAdapter::NoRecentBlockhashes.to_u32().unwrap(),),
-                false,
-            ),
-            Some(NonceError::NoRecentBlockhashes),
-        );
-        assert_eq!(
-            instruction_to_nonce_error(
-                &InstructionError::Custom(NonceErrorAdapter::NotExpired.to_u32().unwrap(),),
-                false,
-            ),
-            Some(NonceError::NotExpired),
-        );
-        assert_eq!(
-            instruction_to_nonce_error(
-                &InstructionError::Custom(NonceErrorAdapter::UnexpectedValue.to_u32().unwrap(),),
-                false,
-            ),
-            Some(NonceError::UnexpectedValue),
-        );
-        assert_eq!(
-            instruction_to_nonce_error(
-                &InstructionError::Custom(NonceErrorAdapter::BadAccountState.to_u32().unwrap(),),
-                false,
-            ),
-            Some(NonceError::BadAccountState),
-        );
-        assert_eq!(
-            instruction_to_nonce_error(&InstructionError::Custom(u32::MAX), false),
-            None,
-        );
-        assert_eq!(
-            instruction_to_nonce_error(
-                &InstructionError::Custom(SystemError::NonceNoRecentBlockhashes.to_u32().unwrap(),),
-                true,
-            ),
-            Some(NonceError::NoRecentBlockhashes),
-        );
-        assert_eq!(
-            instruction_to_nonce_error(
-                &InstructionError::Custom(SystemError::NonceBlockhashNotExpired.to_u32().unwrap(),),
-                true,
-            ),
-            Some(NonceError::NotExpired),
-        );
-        assert_eq!(
-            instruction_to_nonce_error(
-                &InstructionError::Custom(
-                    SystemError::NonceUnexpectedBlockhashValue.to_u32().unwrap(),
-                ),
-                true,
-            ),
-            Some(NonceError::UnexpectedValue),
-        );
-        assert_eq!(
-            instruction_to_nonce_error(&InstructionError::InvalidAccountData, true),
-            Some(NonceError::BadAccountState),
-        );
-        assert_eq!(
-            instruction_to_nonce_error(&InstructionError::Custom(u32::MAX), true),
-            None,
-        );
-    }
-
-    #[test]
-    fn test_nonce_error_adapter_compat() {
-        assert_eq!(
-            NonceError::NoRecentBlockhashes.to_u32(),
-            NonceErrorAdapter::NoRecentBlockhashes.to_u32(),
-        );
-        assert_eq!(
-            NonceError::NotExpired.to_u32(),
-            NonceErrorAdapter::NotExpired.to_u32(),
-        );
-        assert_eq!(
-            NonceError::UnexpectedValue.to_u32(),
-            NonceErrorAdapter::UnexpectedValue.to_u32(),
-        );
-        assert_eq!(
-            NonceError::BadAccountState.to_u32(),
-            NonceErrorAdapter::BadAccountState.to_u32(),
-        );
     }
 }
